@@ -3,8 +3,6 @@ use std::process::exit;
 use clap::{App, Arg, SubCommand};
 
 use kvs::{KvStore, Result};
-use std::path::Path;
-
 
 fn main() -> Result<()> {
     let matches = App::new("My Super Program")
@@ -52,7 +50,7 @@ fn main() -> Result<()> {
         kvs.remove(key).map_err(|_| {
             println!("Key not found");
             exit(1);
-        });
+        }).unwrap();
         exit(0);
     } else {
         exit(1);

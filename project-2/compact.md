@@ -18,3 +18,27 @@ compact_output_file_(read_file_id): name as compacting_{}
 compact_finished_file_(read_only_files_id)
 
 ### code design
+
+#### file manager
+
+manager file name,file create,delete,file meta, etc
+
+#### dbIndex
+
+a hash map, from key to file id and file offset 
+need lock, thread safe
+contains a deleted key set for compact
+
+#### request_worker
+
+handle client request, get ,set, rm
+
+#### compactor worker
+
+handle compact
+
+### how to test
+
+
+
+
