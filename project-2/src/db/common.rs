@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub type Result<T> = std::result::Result<T, failure::Error>;
+pub type DBItem = (String, String);
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Command {
@@ -18,5 +19,3 @@ impl Command {
         a
     }
 }
-
-pub struct ValueIndex {}

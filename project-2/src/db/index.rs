@@ -1,7 +1,8 @@
-use super::common::ValueIndex;
 use std::collections::HashMap;
 
-struct DBIndex {
+use crate::db::file_manager::ValueIndex;
+
+pub struct DBIndex {
     m: HashMap<String, ValueIndex>
 // keytomb todo
 }

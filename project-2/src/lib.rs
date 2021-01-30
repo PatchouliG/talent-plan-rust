@@ -6,7 +6,8 @@ use failure::_core::cell::RefCell;
 
 use db::file_manager::DBFile;
 use db::common::Command;
-use crate::db::file_manager::DBIter;
+use db::file_manager::DBIter;
+use db::index::DBIndex;
 
 mod db;
 
