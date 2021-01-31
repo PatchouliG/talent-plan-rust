@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 
 use failure::_core::cmp::max;
 use log::{info, warn};
-use regex::{CaptureMatches, Regex};
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::map::Entry::Vacant;
