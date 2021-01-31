@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::db::file_manager::ValueIndex;
+use crate::db::file_manager::{ValueIndex, FileManager};
 
 pub struct DBIndex {
     m: HashMap<String, ValueIndex>

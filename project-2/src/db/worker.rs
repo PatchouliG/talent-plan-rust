@@ -9,39 +9,35 @@ use crate::db::index::DBIndex;
 use super::common::Result;
 use super::file_manager::FileManager;
 
-// enum Request {
-//     Get(String),
-//     Set(String, String),
-//     Rm(String),
-// }
-
 pub struct RequestWorker {
     fm: Arc<Mutex<FileManager>>,
     index: Arc<Mutex<DBIndex>>,
     files: HashMap<FileId, NormalFileMeta>,
     // file size reach limit,need to compact
     compactTx: Sender<FileId>,
-    // requestRx: Receiver<Request>,
-    // response: Sender<Result<String>>,
+    // current write file
+    current: NormalFileMeta,
 }
 
 impl RequestWorker {
-    pub fn new(fm: Arc<Mutex<FileManager>>) -> RequestWorker {
+    pub fn new(fm: Arc<Mutex<FileManager>>, index: Arc<Mutex<DBIndex>>) -> (RequestWorker) {
         //     get all normal files from fm
         //     build index
         //     return
         unimplemented!()
     }
     // call from lib
-    pub fn handleSet(&mut self) {
+    pub fn handle_set(&mut self, key: &str, value: &str) -> Result<()> {
         //     if file reach limit, get new file id from fm
         //     set value
+        unimplemented!()
     }
-    pub fn handleRm(&mut self) {
+    pub fn handle_rm(&mut self, key: &str) -> Result<()> {
         //     if file reach limit, get new file id from fm
         //     set value
+        unimplemented!()
     }
-    pub fn handleGet(&self, key: &str) -> Result<Option<String>> {
+    pub fn handle_get(&self, key: &str) -> Result<Option<String>> {
         unimplemented!()
     }
 }
@@ -50,17 +46,19 @@ pub struct CompactorWorker {
     fm: Arc<Mutex<FileManager>>,
     index: Arc<Mutex<DBIndex>>,
     // need compact
-    compactRx: Receiver<FileId>,
+    compact_rx: Receiver<FileId>,
 }
 
 impl CompactorWorker {
-    pub fn new(fm: Arc<Mutex<FileManager>>) -> CompactorWorker {
-        // let (tx, rx) =
-        //     mpsc::channel();
-        //     start thread
+    pub fn new(fm: Arc<Mutex<FileManager>>, index: Arc<Mutex<DBIndex>>) -> Sender<FileId> {
+        let (tx, rx) = mpsc::channel::<FileId>();
+        // start
+        // thread
+        let res: CompactorWorker = CompactorWorker { fm, index, compact_rx: rx };
+        std::thread::spawn(move || res.handle_compact());
         unimplemented!()
     }
-    pub fn handleCompact() {
+    pub fn handle_compact(&self) {
         //     wait until more than 2 files
         //     get new fileid from fm
         //     start compact

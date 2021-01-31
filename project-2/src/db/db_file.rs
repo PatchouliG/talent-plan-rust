@@ -3,7 +3,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{SeekFrom, Write, Seek, Read};
 use std::path::Path;
 use super::common::Result;
-use crate::db::common::{FileId, Command, DB_FILE_NAME};
+use crate::db::common::{FileId, Command, DB_FILE_NAME, FileOffset};
+use crate::db::file_manager::ValueIndex;
 
 pub struct DBFile {
     file: RefCell<File>,
@@ -27,7 +28,7 @@ impl DBFile {
         DBFile::new_by_file(path_str)
     }
 
-    pub fn write(&mut self, content: &str) -> Result<usize> {
+    pub fn write(&mut self, content: &str) -> Result<FileOffset> {
         let res = self.end_position;
 
         let b = content.as_bytes();
@@ -36,9 +37,9 @@ impl DBFile {
         self.end_position += file_mut.write(&len)?;
         self.end_position += file_mut.write(b)?;
         file_mut.flush()?;
-        Result::Ok(res)
+        Result::Ok(res as FileOffset)
     }
-    pub fn get(&self, offset: FileId) -> Result<(String, usize)> {
+    pub fn get(&self, offset: FileOffset) -> Result<(String, usize)> {
         let mut file_mut = self.file.borrow_mut();
 
         let position = file_mut.seek(SeekFrom::Current(0))?;
