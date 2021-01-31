@@ -5,6 +5,7 @@ use std::path::Path;
 use super::common::Result;
 use crate::db::common::{FileId, Command, DB_FILE_NAME, FileOffset};
 use crate::db::file_manager::ValueIndex;
+use clap::Format;
 
 pub struct DBFile {
     file: RefCell<File>,
@@ -12,20 +13,24 @@ pub struct DBFile {
     end_position: usize,
 }
 
+impl Clone for DBFile {
+    fn clone(&self) -> Self {
+        DBFile::new_by_file(Path::new(&self.path)).unwrap()
+    }
+}
+
 
 impl DBFile {
-    fn new_by_file(db_file_path: &str) -> Result<DBFile> {
+    fn new_by_file(db_file_path: &Path) -> Result<DBFile> {
         let file = RefCell::new(OpenOptions::new().read(true).append(true).
             create(true).
             open(Path::new(&db_file_path))?);
         let len = file.borrow_mut().seek(SeekFrom::End(0)).unwrap();
-        Result::Ok(DBFile { file, path: db_file_path.to_owned(), end_position: len as usize })
+        Result::Ok(DBFile { file, path: db_file_path.to_str().unwrap().to_owned(), end_position: len as usize })
     }
 
-    pub fn new(work_dir: &Path) -> Result<DBFile> {
-        let d = work_dir.join(DB_FILE_NAME);
-        let path_str = d.to_str().unwrap();
-        DBFile::new_by_file(path_str)
+    pub fn new(file: &Path) -> Result<DBFile> {
+        DBFile::new_by_file(file)
     }
 
     pub fn write(&mut self, content: &str) -> Result<FileOffset> {
@@ -58,7 +63,7 @@ impl DBFile {
 }
 
 pub struct DBIter<'a> {
-    position: FileId,
+    position: FileOffset,
     db: &'a DBFile,
 }
 
@@ -69,16 +74,14 @@ impl<'a> DBIter<'a> {
 }
 
 impl<'a> Iterator for DBIter<'a> {
-    type Item = (Command, usize);
+    type Item = String;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let p = self.position as usize;
         let (c, size) = self.db.get(self.position).ok()?;
         if size == 0 {
             return None;
         }
-        self.position += size as FileId;
-        let res: Command = serde_json::from_str(&c).unwrap();
-        Some((res, p))
+        self.position += size as FileOffset;
+        Some(c)
     }
 }

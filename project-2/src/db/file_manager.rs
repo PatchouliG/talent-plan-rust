@@ -1,61 +1,79 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use regex::Regex;
-use serde::Serialize;
+use failure::_core::cmp::max;
+use log::{info, warn};
+use regex::{CaptureMatches, Regex};
 use serde::Deserialize;
+use serde::Serialize;
+use serde_json::map::Entry::Vacant;
+
+use crate::db::db_file::{DBFile, DBIter};
+use crate::db::file_manager::MetaCommand::CompactFinish;
 
 use super::common::*;
 use super::index;
-use crate::db::db_file::DBFile;
-use failure::_core::cmp::max;
 
 pub struct ValueIndex {
-    id: FileId,
-    offset: FileOffset,
+    pub id: FileId,
+    pub offset: FileOffset,
 }
 
-const FILE_SIZE_LIMIT: u64 = 234;
-const START_ID: i32 = 1;
+pub const FILE_SIZE_LIMIT: u64 = 234;
+const START_ID: FileId = 1;
+
+fn idToPath(id: &FileId, work_dir: &PathBuf) -> PathBuf {
+    let res = work_dir.join(Path::new(&id.to_string()));
+    res
+}
 
 pub struct FileManager {
     nextId: FileId,
     meta: DBMeta,
-    normalFiles: Vec<NormalFileMeta>,
-    compactFiles: Option<CompactFileMeta>,
 }
-
 
 impl FileManager {
     pub fn new(workDir: &Path) -> FileManager {
-
-        let dbMeat = DBMeta::new(workDir);
-        let metas = dbMeat.listMeta();
-        metas.iter().filter(|meta| {
-            if let FileMeta::compact(_, _) = meta {
-                return true;
-            }
-            false
-        }).map(|meta| {
-            //     delete file
-        });
-        //  find max
-        // metas.iter().map(|meta|)
-
-        unimplemented!()
+        let meta = DBMeta::new(workDir);
+        let nextId = meta.listMeta().iter().map(|m| m.id).max().unwrap_or(START_ID);
+        // todo delete unused file
+        FileManager { nextId, meta }
     }
     pub fn nextFile(&mut self) -> NormalFileMeta {
         let res = NormalFileMeta { id: self.nextId };
+        let c = MetaCommand::AddNormal(res.clone());
+        self.meta.update(c);
         self.nextId += 1;
-        self.normalFiles.push(res.clone());
         res
     }
-    pub fn nextCompacteFile(&mut self, maxId: FileId) -> CompactFileMeta {
+    pub fn nextCompactFile(&mut self, maxId: FileId) -> CompactFileMeta {
         let res = CompactFileMeta { id: self.nextId, maxNormalFileId: maxId };
         self.nextId += 1;
         res
+    }
+
+    pub fn compactFinish(&mut self, c: &CompactFileMeta) {
+        self.meta.update(MetaCommand::CompactFinish(c.clone()));
+        let p = idToPath(&c.id, &self.meta.work_dir);
+        self.deleteUnusedFiles(c.maxNormalFileId);
+        // std::fs::remove_file(p);
+    }
+
+    fn deleteUnusedFiles(&self, maxId: u64) {
+        let paths = std::fs::read_dir(&self.meta.work_dir).unwrap();
+
+        for path in paths {
+            let name = path.unwrap().file_name().to_str().unwrap().to_owned();
+            let res = name.parse::<u64>();
+            if let Ok(i) = res {
+                if i <= maxId {
+                    std::fs::remove_file(&name);
+                    info!("delete file {}", &name);
+                }
+            }
+        }
     }
 }
 
@@ -65,128 +83,162 @@ pub enum FileMeta {
     compact(CompactFileMeta, bool),
 }
 
-#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Clone)]
 pub struct NormalFileMeta {
     id: FileId
 }
 
 impl NormalFileMeta {
-    fn new(s: &str) -> Option<NormalFileMeta> {
-        let reg = Regex::new(r"^(\d+)$").unwrap();
-        reg.captures(s).map(|x| {
-            let a = x.get(1).unwrap().as_str().parse::<FileId>().unwrap();
-            NormalFileMeta { id: a }
-        })
+    pub fn new(id: FileId) -> NormalFileMeta {
+        NormalFileMeta { id }
     }
     fn toStr(&self) -> String {
         self.id.to_string()
     }
+
+    pub fn getId(&self) -> FileId {
+        self.id
+    }
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
-struct CompactFileMeta {
+#[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Hash, Clone)]
+pub struct CompactFileMeta {
     id: FileId,
     maxNormalFileId: FileId,
 }
 
-struct DBMeta {
-    file: DBFile,
+impl CompactFileMeta {
+    pub fn fileName(&self) -> String {
+        format!("{}", self.id)
+    }
+
+    pub fn new(id: FileId, maxId: FileId) -> CompactFileMeta {
+        assert_eq!(id > maxId, true);
+        CompactFileMeta { id, maxNormalFileId: maxId }
+    }
 }
 
-struct MetaCommand {}
+
+const DB_META_FILE_NAME: &str = "meta.db";
+
+struct DBMeta {
+    file: DBFile,
+    work_dir: PathBuf,
+    normalFiles: HashSet<NormalFileMeta>,
+    compactFile: Option<CompactFileMeta>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+enum MetaCommand {
+    AddCompact(CompactFileMeta),
+    AddNormal(NormalFileMeta),
+    CompactFinish(CompactFileMeta),
+    // Delete(NormalFileMeta),
+}
 
 impl DBMeta {
-    fn new(work_dir: &Path) -> DBMeta { unimplemented!() }
-    fn listMeta(&self) -> Vec<FileMeta> { unimplemented!() }
-    fn modifyMeta(&mut self, c: MetaCommand) { unimplemented!() }
+    // todo delete unused file
+    fn new(work_dir: &Path) -> DBMeta {
+        let p = work_dir.join(DB_META_FILE_NAME);
+        let dbFile = DBFile::new(p.as_path()).unwrap();
+        let it = DBIter::new(&dbFile);
+
+        let mut res = DBMeta { file: dbFile.clone(), work_dir: work_dir.to_path_buf(), normalFiles: HashSet::new(), compactFile: None };
+
+        for s in it {
+            let c = serde_json::from_str::<MetaCommand>(&s).unwrap();
+            res.updateMemory(&c);
+        };
+        return res;
+    }
+
+    fn listMeta(&self) -> &HashSet<NormalFileMeta> { &self.normalFiles }
+
+    fn update(&mut self, c: MetaCommand) {
+        self.file.write(&serde_json::to_string::<MetaCommand>(&c).unwrap()).unwrap();
+        self.updateMemory(&c);
+    }
+
+    fn updateMemory(&mut self, c: &MetaCommand) {
+        let normalFiles = &mut self.normalFiles;
+        let c = c.clone();
+        // let mut compactingFiles = HashSet::new();
+        match c {
+            MetaCommand::AddCompact(c) => {
+                assert_eq!(self.compactFile, None);
+                // compactingFiles.insert(c);
+                self.compactFile = Some(c);
+            }
+            MetaCommand::AddNormal(n) => {
+                normalFiles.insert(n);
+            }
+            MetaCommand::CompactFinish(c) => {
+                assert_eq!(self.compactFile.as_ref().map_or(false, |f| f.id == c.id), true);
+                let maxID = c.maxNormalFileId;
+                self.compactFile = None;
+                let set: HashSet<NormalFileMeta> = self.normalFiles.iter().filter(|m| m.id > maxID).
+                    map(|m| m.clone()).collect();
+                self.normalFiles = set;
+                // todo delete unused file
+            }
+        }
+    }
 }
 
 
 #[cfg(test)]
-mod test {
+mod testFm {
     use std::fs::OpenOptions;
     use std::path::Path;
     use std::process::id;
 
     use tempfile::TempDir;
 
-    use crate::db::file_manager::{CompactFileMeta, FileManager, NormalFileMeta};
-
-// #[test]
-// fn testFileId() {
-//     let tmpDir = TempDir::new().unwrap();
-//     let id = 2;
-//     OpenOptions::new().write(true).create(true).open(tmpDir.path().
-//         join(id.to_string()).as_path()).unwrap();
-//     let mut fm = FileManager::new(tmpDir.path());
-//
-//     let id1 = fm.nextFile();
-//     let id2 = fm.nextFile();
-//     let id3 = fm.nextCompacteFile();
-//
-//     assert_ne!(id1, id2);
-//     assert_eq!(id1.id, id + 1);
-//     assert_eq!(id2.id, id + 2);
-//     assert_eq!(id3.id, id + 3);
-// }
+    use crate::db::file_manager::{CompactFileMeta, DB_META_FILE_NAME, DBMeta, FileManager, MetaCommand, NormalFileMeta};
 
     #[test]
-    fn debug() {
-        use regex::Regex;
-        let re = Regex::new(r"compact_(\d+)").unwrap();
-        print!("{}", re.captures("compact_3234").unwrap().get(1).unwrap().as_str());
-        assert!(re.is_match("compact_3234"));
+    fn testCreateMeta() {
+        let tmpDir = TempDir::new().unwrap();
+        let p = tmpDir.path().join(Path::new(DB_META_FILE_NAME));
+        assert_ne!(p.exists(), true);
+        let dbMeta = DBMeta::new(tmpDir.path());
+        assert_eq!(p.exists(), true);
     }
 
-// #[test]
-// fn testDiscardCompactFile() {
-//     let n = TempDir::new().unwrap();
-//     let tmpDir = n.path().to_owned();
-//     let c = CompactFileMeta { id: 9 };
-//     let s = c.toStr();
-//     let p = tmpDir.join(s).as_path().to_owned();
-//
-//     let n = NormalFileMeta { id: 34 };
-//
-//     OpenOptions::new().write(true).create(true).open(&p).unwrap();
-//     OpenOptions::new().write(true).create(true).open(
-//         tmpDir.join(Path::new(&n.toStr())).as_path()
-//     ).unwrap();
-//     assert_eq!(p.exists(), true);
-//
-//     let mut fm = FileManager::new(tmpDir.as_path());
-//     assert_ne!(p.exists(), true);
-//
-//     assert_eq!(fm.normalFiles.len(), 1);
-//     assert_eq!(fm.normalFiles[0], n);
-// }
+    #[test]
+    fn testOpenMeta() {
+        let tmpDir = TempDir::new().unwrap();
+        let p = tmpDir.path().join(Path::new(DB_META_FILE_NAME));
+        OpenOptions::new().create(true).write(true).open(p.as_path()).unwrap();
+        assert_eq!(p.exists(), true);
+        DBMeta::new(tmpDir.path());
+    }
 
+    #[test]
+    fn testModifyMeta() {
+        let tmpDir = TempDir::new().unwrap();
+        let mut dbMeta = DBMeta::new(tmpDir.path());
+        let n = NormalFileMeta::new(8);
+        dbMeta.update(MetaCommand::AddNormal(n.clone()));
+        dbMeta.update(MetaCommand::AddCompact(CompactFileMeta::new(7, 4)));
+        drop(dbMeta);
 
-// #[test]
-// fn testCompactFileMeta() {
-//     let a = CompactFileMeta { id: 1 };
-//     let s = a.toStr();
-//     assert_eq!(s, "compact_1");
-//
-//     let a2 = CompactFileMeta::new(&s).unwrap();
-//     assert_eq!(a2, a);
-//
-//     let b = CompactFileMeta { id: 5 };
-//     let s = b.toStr();
-//     assert_eq!(s, "compact_5");
-//
-//     let mut c = CompactFileMeta::new(&s).unwrap();
-//     assert_eq!(b, c);
-//     c.finish();
-// }
+        let mut dbMeta = DBMeta::new(tmpDir.path());
 
-// #[test]
-// fn testNormalFileMeta() {
-//     let a = NormalFileMeta { id: 123 };
-//     let s = a.toStr();
-//     assert_eq!(s, "123");
-//
-//     let b = NormalFileMeta::new(&s).unwrap();
-//     assert_eq!(a, b);
-// }
+        let metas = dbMeta.listMeta();
+        assert_eq!(metas.contains(&n), true);
+
+        assert_eq!(dbMeta.compactFile.as_ref().unwrap().id, 7);
+        assert_eq!(dbMeta.compactFile.unwrap().maxNormalFileId, 4);
+    }
+
+    //
+    // #[test]
+    // fn debug() {
+    //     use regex::Regex;
+    //     let re = Regex::new(r"compact_(\d+)").unwrap();
+    //     print!("{}", re.captures("compact_3234").unwrap().get(1).unwrap().as_str());
+    //     assert!(re.is_match("compact_3234"));
+    // }
+
 }
