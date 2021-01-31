@@ -1,5 +1,11 @@
 use serde::{Deserialize, Serialize};
 
+pub type FileId = u64;
+pub type FileOffset = u64;
+
+// todo
+pub const DB_FILE_NAME: &str = "kvs.db";
+
 pub type Result<T> = std::result::Result<T, failure::Error>;
 pub type DBItem = (String, String);
 

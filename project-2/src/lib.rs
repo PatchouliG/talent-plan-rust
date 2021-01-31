@@ -5,9 +5,9 @@ use std::path::Path;
 use failure::_core::cell::RefCell;
 
 use db::worker::RequestWorker;
-use db::file_manager::DBFile;
+use db::db_file::DBFile;
 use db::common::Command;
-use db::file_manager::DBIter;
+use db::db_file::DBIter;
 use db::index::DBIndex;
 use crate::db::file_manager::FileManager;
 use std::sync::{Arc, Mutex};

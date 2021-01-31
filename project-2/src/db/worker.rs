@@ -1,11 +1,13 @@
-use crate::db::file_manager::{DBFile, FileId, NormalFileMeta};
-
-use super::file_manager::FileManager;
-use std::sync::{Arc, Mutex, mpsc};
-use crate::db::index::DBIndex;
-use std::sync::mpsc::{Sender, Receiver};
-use super::common::Result;
 use std::collections::HashMap;
+use std::sync::{Arc, mpsc, Mutex};
+use std::sync::mpsc::{Receiver, Sender};
+
+use crate::db::common::FileId;
+use crate::db::file_manager::NormalFileMeta;
+use crate::db::index::DBIndex;
+
+use super::common::Result;
+use super::file_manager::FileManager;
 
 // enum Request {
 //     Get(String),
@@ -39,7 +41,7 @@ impl RequestWorker {
         //     if file reach limit, get new file id from fm
         //     set value
     }
-    pub fn handleGet(&self,key:&str)->Result<Option<String>> {
+    pub fn handleGet(&self, key: &str) -> Result<Option<String>> {
         unimplemented!()
     }
 }
@@ -52,10 +54,10 @@ pub struct CompactorWorker {
 }
 
 impl CompactorWorker {
-    pub fn new(fm:Arc<Mutex<FileManager>>) -> CompactorWorker {
+    pub fn new(fm: Arc<Mutex<FileManager>>) -> CompactorWorker {
         // let (tx, rx) =
         //     mpsc::channel();
-    //     start thread
+        //     start thread
         unimplemented!()
     }
     pub fn handleCompact() {
