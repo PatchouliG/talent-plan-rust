@@ -7,6 +7,7 @@ pub struct DBIndex {
 // keytomb todo
 }
 
+// not thread safe, need lock
 impl DBIndex {
     pub fn new() -> DBIndex {
         DBIndex { m: HashMap::new() }
