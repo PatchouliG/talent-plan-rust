@@ -12,10 +12,13 @@ use super::index;
 
 const DB_FILE_NAME: &str = "kvs.db";
 
-type FileId = u64;
+pub type FileId = u64;
 type FileOffset = u64;
 
-pub struct ValueIndex {}
+pub struct ValueIndex {
+    id: FileId,
+    offset: FileOffset,
+}
 
 const FILE_SIZE_LIMIT: u64 = 234;
 
@@ -71,7 +74,7 @@ impl FileManager {
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]
-struct NormalFileMeta {
+pub struct NormalFileMeta {
     id: FileId
 }
 
