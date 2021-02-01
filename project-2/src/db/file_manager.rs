@@ -57,7 +57,6 @@ impl FileManager {
         self.meta.update(MetaCommand::CompactFinish(c.clone()));
         let p = idToPath(&c.id, &self.meta.work_dir);
         self.deleteUnusedFiles(c.maxNormalFileId);
-        // std::fs::remove_file(p);
     }
 
     fn deleteUnusedFiles(&self, maxId: u64) {
@@ -116,7 +115,6 @@ impl CompactFileMeta {
         CompactFileMeta { id, maxNormalFileId: maxId }
     }
 }
-
 
 const DB_META_FILE_NAME: &str = "meta.db";
 
@@ -184,7 +182,6 @@ impl DBMeta {
     }
 }
 
-
 #[cfg(test)]
 mod testFm {
     use std::fs::OpenOptions;
@@ -239,5 +236,4 @@ mod testFm {
     //     print!("{}", re.captures("compact_3234").unwrap().get(1).unwrap().as_str());
     //     assert!(re.is_match("compact_3234"));
     // }
-
 }
