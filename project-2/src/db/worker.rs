@@ -2,13 +2,14 @@ use std::collections::HashMap;
 use std::sync::{Arc, mpsc, Mutex};
 use std::sync::mpsc::{Receiver, Sender};
 
-use crate::db::common::{FileId, Command};
-use crate::db::file_manager::{NormalFileMeta, ValueIndex, FILE_SIZE_LIMIT};
+use crate::db::common::{Command, FileId};
+use crate::db::db_file::DBFile;
+use crate::db::db_meta::NormalFileMeta;
+use crate::db::file_manager::{FILE_SIZE_LIMIT, ValueIndex};
 use crate::db::index::DBIndex;
 
 use super::common::Result;
 use super::file_manager::FileManager;
-use crate::db::db_file::DBFile;
 
 pub struct RequestWorker {
     fm: Arc<Mutex<FileManager>>,
