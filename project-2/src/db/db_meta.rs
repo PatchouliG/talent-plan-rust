@@ -8,62 +8,18 @@ use crate::db::db_file::{DBFile, DBIter};
 
 use super::common::*;
 
-#[derive(Serialize, Deserialize)]
-pub enum FileMeta {
-    normal(NormalFileMeta),
-    compact(CompactFileMeta, bool),
-}
-
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Clone)]
-pub struct NormalFileMeta {
-    id: FileId
-}
-
-impl NormalFileMeta {
-    pub fn new(id: FileId) -> NormalFileMeta {
-        NormalFileMeta { id }
-    }
-    fn toStr(&self) -> String {
-        self.id.to_string()
-    }
-
-    pub fn getId(&self) -> FileId {
-        self.id
-    }
-}
-
-#[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Hash, Clone)]
-pub struct CompactFileMeta {
-    id: FileId,
-    maxNormalFileId: FileId,
-}
-
-impl CompactFileMeta {
-    pub fn fileName(&self) -> String {
-        format!("{}", self.id)
-    }
-
-    pub fn new(id: FileId, maxId: FileId) -> CompactFileMeta {
-        assert_eq!(id > maxId, true);
-        CompactFileMeta { id, maxNormalFileId: maxId }
-    }
-}
-
 const DB_META_FILE_NAME: &str = "meta.db";
 
 pub struct DBMeta {
-    file: DBFile,
+    metaFile: DBFile,
     work_dir: PathBuf,
-    normalFiles: HashSet<NormalFileMeta>,
-    compactFile: Option<CompactFileMeta>,
+    fileIdS: HashSet<FileId>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum MetaCommand {
-    AddCompact(CompactFileMeta),
-    AddNormal(NormalFileMeta),
-    CompactFinish(CompactFileMeta),
-    // Delete(NormalFileMeta),
+    Add(FileId),
+    Delete(FileId),
 }
 
 impl DBMeta {
@@ -75,7 +31,7 @@ impl DBMeta {
         let dbFile = DBFile::new(p.as_path()).unwrap();
         let it = DBIter::new(&dbFile);
 
-        let mut res = DBMeta { file: dbFile.clone(), work_dir: work_dir.to_path_buf(), normalFiles: HashSet::new(), compactFile: None };
+        let mut res = DBMeta { metaFile: dbFile.clone(), work_dir: work_dir.to_path_buf(), fileIdS: HashSet::new() };
 
         for s in it {
             let c = serde_json::from_str::<MetaCommand>(&s).unwrap();
@@ -84,48 +40,34 @@ impl DBMeta {
         return res;
     }
 
-    pub fn listMeta(&self) -> &HashSet<NormalFileMeta> { &self.normalFiles }
+    pub fn listMeta(&self) -> &HashSet<FileId> { &self.fileIdS }
 
     pub fn update(&mut self, c: MetaCommand) {
-        self.file.write(&serde_json::to_string::<MetaCommand>(&c).unwrap()).unwrap();
+        self.metaFile.write(&serde_json::to_string::<MetaCommand>(&c).unwrap()).unwrap();
         self.updateMemory(&c);
     }
 
     fn updateMemory(&mut self, c: &MetaCommand) {
-        let normalFiles = &mut self.normalFiles;
-        let c = c.clone();
-        // let mut compactingFiles = HashSet::new();
         match c {
-            MetaCommand::AddCompact(c) => {
-                assert_eq!(self.compactFile, None);
-                // compactingFiles.insert(c);
-                self.compactFile = Some(c);
+            MetaCommand::Add(id) => {
+                self.fileIdS.insert(*id);
             }
-            MetaCommand::AddNormal(n) => {
-                normalFiles.insert(n);
-            }
-            MetaCommand::CompactFinish(c) => {
-                assert_eq!(self.compactFile.as_ref().map_or(false, |f| f.id == c.id), true);
-                let maxID = c.maxNormalFileId;
-                self.compactFile = None;
-                let set: HashSet<NormalFileMeta> = self.normalFiles.iter().filter(|m| m.id > maxID).
-                    map(|m| m.clone()).collect();
-                self.normalFiles = set;
-                // todo delete unused file
+            MetaCommand::Delete(id) => {
+                self.fileIdS.remove(&id);
             }
         }
     }
 }
 
 #[cfg(test)]
-mod testFm {
+mod testDBMeta {
     use std::fs::OpenOptions;
     use std::path::Path;
     use std::process::id;
 
     use tempfile::TempDir;
 
-    use crate::db::db_meta::{CompactFileMeta, DB_META_FILE_NAME, DBMeta, MetaCommand, NormalFileMeta};
+    use crate::db::db_meta::{DB_META_FILE_NAME, DBMeta, MetaCommand};
 
     #[test]
     fn testCreateMeta() {
@@ -149,17 +91,25 @@ mod testFm {
     fn testModifyMeta() {
         let tmpDir = TempDir::new().unwrap();
         let mut dbMeta = DBMeta::new(tmpDir.path());
-        let n = NormalFileMeta::new(8);
-        dbMeta.update(MetaCommand::AddNormal(n.clone()));
-        dbMeta.update(MetaCommand::AddCompact(CompactFileMeta::new(7, 4)));
+        // add 1,2,3
+        dbMeta.update(MetaCommand::Add(1));
+        dbMeta.update(MetaCommand::Add(2));
+        dbMeta.update(MetaCommand::Add(3));
+        // delete
+        dbMeta.update(MetaCommand::Delete(2));
         drop(dbMeta);
 
+        // reopen
         let mut dbMeta = DBMeta::new(tmpDir.path());
 
-        let metas = dbMeta.listMeta();
-        assert_eq!(metas.contains(&n), true);
+        // add 4
+        dbMeta.update(MetaCommand::Add(4));
 
-        assert_eq!(dbMeta.compactFile.as_ref().unwrap().id, 7);
-        assert_eq!(dbMeta.compactFile.unwrap().maxNormalFileId, 4);
+        // check, should find 1,3,4
+        let metas = dbMeta.listMeta();
+        assert_eq!(metas.contains(&1), true);
+        assert_eq!(metas.contains(&3), true);
+        assert_eq!(metas.contains(&4), true);
+        assert_eq!(metas.contains(&2), false);
     }
 }
