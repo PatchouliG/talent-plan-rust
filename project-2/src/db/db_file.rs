@@ -1,9 +1,9 @@
 use failure::_core::cell::RefCell;
 use std::fs::{File, OpenOptions};
 use std::io::{SeekFrom, Write, Seek, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use super::common::Result;
-use crate::db::common::{FileId, Command, DB_FILE_NAME, FileOffset};
+use crate::db::common::{FileId, Command,  FileOffset};
 use crate::db::file_manager::ValueIndex;
 use clap::Format;
 
@@ -27,6 +27,10 @@ impl DBFile {
             open(Path::new(&db_file_path))?);
         let len = file.borrow_mut().seek(SeekFrom::End(0)).unwrap();
         Result::Ok(DBFile { file, path: db_file_path.to_str().unwrap().to_owned(), end_position: len as usize })
+    }
+
+    pub fn delete(self) {
+        std::fs::remove_file(self.path);
     }
 
     pub fn new(file: &Path) -> Result<DBFile> {

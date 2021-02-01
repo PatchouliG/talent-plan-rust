@@ -10,16 +10,36 @@ use super::common::*;
 
 const DB_META_FILE_NAME: &str = "meta.db";
 
+#[derive(Serialize, Deserialize, Debug, Clone, Hash, Eq, PartialEq)]
+pub struct FileMeta {
+    pub id: FileId,
+    pub bucketId: BucketId,
+    pub isSnapshot: bool,
+}
+
+impl FileMeta {
+    pub fn new(id: FileId, bucketId: BucketId, isSnapshot: bool) -> FileMeta {
+        FileMeta { id, bucketId, isSnapshot }
+    }
+
+    pub fn getId(&self) -> FileId {
+        self.id
+    }
+    pub fn isSnapshot(&self) -> bool {
+        self.isSnapshot
+    }
+}
+
 pub struct DBMeta {
     metaFile: DBFile,
     work_dir: PathBuf,
-    fileIdS: HashSet<FileId>,
+    fileMetas: HashSet<FileMeta>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum MetaCommand {
-    Add(FileId),
-    Delete(FileId),
+    Insert(FileMeta),
+    Delete(FileMeta),
 }
 
 impl DBMeta {
@@ -31,7 +51,7 @@ impl DBMeta {
         let dbFile = DBFile::new(p.as_path()).unwrap();
         let it = DBIter::new(&dbFile);
 
-        let mut res = DBMeta { metaFile: dbFile.clone(), work_dir: work_dir.to_path_buf(), fileIdS: HashSet::new() };
+        let mut res = DBMeta { metaFile: dbFile.clone(), work_dir: work_dir.to_path_buf(), fileMetas: HashSet::new() };
 
         for s in it {
             let c = serde_json::from_str::<MetaCommand>(&s).unwrap();
@@ -40,7 +60,7 @@ impl DBMeta {
         return res;
     }
 
-    pub fn listMeta(&self) -> &HashSet<FileId> { &self.fileIdS }
+    pub fn listMeta(&self) -> &HashSet<FileMeta> { &self.fileMetas }
 
     pub fn update(&mut self, c: MetaCommand) {
         self.metaFile.write(&serde_json::to_string::<MetaCommand>(&c).unwrap()).unwrap();
@@ -48,12 +68,13 @@ impl DBMeta {
     }
 
     fn updateMemory(&mut self, c: &MetaCommand) {
-        match c {
-            MetaCommand::Add(id) => {
-                self.fileIdS.insert(*id);
+        let cl = c.clone();
+        match cl {
+            MetaCommand::Insert(m) => {
+                self.fileMetas.insert(m);
             }
-            MetaCommand::Delete(id) => {
-                self.fileIdS.remove(&id);
+            MetaCommand::Delete(m) => {
+                self.fileMetas.remove(&m);
             }
         }
     }
@@ -61,13 +82,18 @@ impl DBMeta {
 
 #[cfg(test)]
 mod testDBMeta {
+    use std::collections::HashSet;
     use std::fs::OpenOptions;
     use std::path::Path;
-    use std::process::id;
 
     use tempfile::TempDir;
 
-    use crate::db::db_meta::{DB_META_FILE_NAME, DBMeta, MetaCommand};
+    use crate::db::common::FileId;
+    use crate::db::db_meta::{DB_META_FILE_NAME, DBMeta, FileMeta, MetaCommand};
+
+    fn newFileMeta(id: FileId) -> FileMeta {
+        FileMeta::new(id, 0, false)
+    }
 
     #[test]
     fn testCreateMeta() {
@@ -92,21 +118,22 @@ mod testDBMeta {
         let tmpDir = TempDir::new().unwrap();
         let mut dbMeta = DBMeta::new(tmpDir.path());
         // add 1,2,3
-        dbMeta.update(MetaCommand::Add(1));
-        dbMeta.update(MetaCommand::Add(2));
-        dbMeta.update(MetaCommand::Add(3));
+        dbMeta.update(MetaCommand::Insert(newFileMeta(1)));
+        dbMeta.update(MetaCommand::Insert(newFileMeta(2)));
+        dbMeta.update(MetaCommand::Insert(newFileMeta(3)));
         // delete
-        dbMeta.update(MetaCommand::Delete(2));
+        dbMeta.update(MetaCommand::Delete(newFileMeta(2)));
         drop(dbMeta);
 
         // reopen
         let mut dbMeta = DBMeta::new(tmpDir.path());
 
         // add 4
-        dbMeta.update(MetaCommand::Add(4));
+        dbMeta.update(MetaCommand::Insert(newFileMeta(4)));
 
         // check, should find 1,3,4
-        let metas = dbMeta.listMeta();
+        let metas = dbMeta.listMeta().iter().map(|m| m.id).
+            collect::<HashSet<FileId>>();
         assert_eq!(metas.contains(&1), true);
         assert_eq!(metas.contains(&3), true);
         assert_eq!(metas.contains(&4), true);
