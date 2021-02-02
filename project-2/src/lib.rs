@@ -11,6 +11,7 @@ use db::worker::RequestWorker;
 
 use crate::db::file_manager::FileManager;
 use crate::db::worker::CompactorWorker;
+use crate::db::index::BUCKET_SIZE;
 
 mod db;
 
@@ -26,11 +27,14 @@ pub struct KvStore {
 impl KvStore {
     pub fn open(work_dir: &Path) -> Result<KvStore> {
         let (fm, sx) = FileManager::new(work_dir);
-        let index = DBIndex::new();
+        let mut index = DBIndex::new();
+        for i in 0..BUCKET_SIZE {
+            let it = fm.getDBIter(i);
+            index.load(i, it);
+        }
         let fmLock = Arc::new(Mutex::new(fm));
-        let indexMutex = Arc::new(Mutex::new(index));
-        let worker = RequestWorker::new(fmLock.clone(), indexMutex.clone());
-        CompactorWorker::new(fmLock.clone(), indexMutex.clone());
+        let worker = RequestWorker::new(fmLock.clone(), index.clone());
+        // CompactorWorker::new(fmLock.clone(), index.clone());
         Ok(KvStore { worker })
     }
     pub fn get(&self, key: String) -> Result<Option<String>> {
@@ -40,12 +44,6 @@ impl KvStore {
         self.worker.handle_set(&key, &value)
     }
     pub fn remove(&mut self, key: String) -> Result<()> {
-        // self.m.remove(&key).ok_or(failure::err_msg("Key not found"))?;
-        //
-        // let command = Command::Remove(key);
-        // self.db.borrow_mut().write(&command.toString())?;
-        // Result::Ok(())
         self.worker.handle_rm(&key)
-        // unimplemented!()
     }
 }

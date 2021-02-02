@@ -12,11 +12,11 @@ use super::file_manager::FileManager;
 
 pub struct RequestWorker {
     fmLock: Arc<Mutex<FileManager>>,
-    index: Arc<Mutex<DBIndex>>,
+    index: DBIndex,
 }
 
 impl RequestWorker {
-    pub fn new(fm: Arc<Mutex<FileManager>>, index: Arc<Mutex<DBIndex>>) -> RequestWorker {
+    pub fn new(fm: Arc<Mutex<FileManager>>, index: DBIndex) -> RequestWorker {
         let mut res = RequestWorker { fmLock: fm, index };
         // build index
         res.load();
@@ -30,13 +30,13 @@ impl RequestWorker {
         let content = c.toString();
         let bucketId = toBucketId(key);
         let mut fm = self.fmLock.lock().unwrap();
-        let mut map = self.index.lock().unwrap();
+        let mut map = &mut self.index;
         let offset = fm.write(bucketId, &content)?;
         map.set(key, offset);
         Ok(())
     }
     pub fn handle_rm(&mut self, key: &str) -> Result<()> {
-        let mut index = self.index.lock().unwrap();
+        let mut index = &mut self.index;
         let mut fm = self.fmLock.lock().unwrap();
         let bId = toBucketId(key);
 
@@ -51,7 +51,7 @@ impl RequestWorker {
     }
     pub fn handle_get(&self, key: &str) -> Result<Option<String>> {
         let bId = toBucketId(key);
-        let index = self.index.lock().unwrap();
+        let index = &self.index;
         let fm = self.fmLock.lock().unwrap();
 
         let res = index.get(key);
@@ -62,7 +62,7 @@ impl RequestWorker {
 
         let offset = res.unwrap();
 
-        let (content, _) = fm.read(bId, *offset)?;
+        let (content, _) = fm.read(bId, offset)?;
         let c = serde_json::from_str::<Command>(&content)?;
 
         if let Command::Set(_, value) = c {
@@ -95,9 +95,8 @@ mod testRequestWork {
             let it = fm.getDBIter(i);
             index.load(i, it);
         }
-        let indexLock = Arc::new(Mutex::new(index));
         let fmLock = Arc::new(Mutex::new(fm));
-        RequestWorker::new(fmLock, indexLock)
+        RequestWorker::new(fmLock, index)
     }
 
     fn buildWork() -> RequestWorker {
@@ -133,14 +132,14 @@ const BUFFER_SIZE_THRESH: usize = 3;
 
 pub struct CompactorWorker {
     fm: Arc<Mutex<FileManager>>,
-    index: Arc<Mutex<DBIndex>>,
+    index: DBIndex,
     // need compact
     compact_rx: Receiver<FileId>,
     // buffer: Vec<FileId>,
 }
 
 impl CompactorWorker {
-    pub fn new(fm: Arc<Mutex<FileManager>>, index: Arc<Mutex<DBIndex>>) -> Sender<FileId> {
+    pub fn new(fm: Arc<Mutex<FileManager>>, index: DBIndex) -> Sender<FileId> {
         let (tx, rx) = mpsc::channel::<FileId>();
         // start thread
         let mut res: CompactorWorker = CompactorWorker { fm, index, compact_rx: rx };
