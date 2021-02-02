@@ -1,9 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
-use crate::db::common::BucketId;
+use crate::db::common::{BucketId, FileOffset, Command};
 use crate::db::common::toBucketId;
 use crate::db::file_manager::{FileManager, ValueIndex};
+use crate::db::db_file::DBIter;
 
 // value bone if rm
 type Map = HashMap<String, ValueIndex>;
@@ -40,10 +41,11 @@ impl DBIndex {
         let m = self.buckets.get(&bId).unwrap();
         m.get(key)
     }
-    pub fn rm(&mut self, key: &str) {
+    // return true if remove success
+    pub fn rm(&mut self, key: &str) -> bool {
         let bId = toBucketId(key);
         let m = self.getMap(bId);
-        m.remove(key);
+        m.remove(key).is_some()
     }
 
     // used by compactor
@@ -58,13 +60,26 @@ impl DBIndex {
     pub fn resetKeyLog(&mut self, bId: BucketId) {
         self.getKeyLog(bId).clear();
     }
+    pub fn load(&mut self, bId: BucketId, iter: DBIter) {
+        let m = self.buckets.get_mut(&bId).unwrap();
+        for (a, b) in iter {
+            let c = serde_json::from_str::<Command>(&a).unwrap();
+            match c {
+                Command::Remove(key) => { m.remove(&key); }
+                Command::Set(key, value) => {
+                    m.insert(key, b);
+                }
+                // ignore others
+                _ => {}
+            }
+        }
+    }
     fn getKeyLog(&mut self, bId: BucketId) -> &mut KeyOperationSetFromRequestWork {
         self.keysLog.get_mut(&bId).unwrap()
     }
     fn getMap(&mut self, bId: BucketId) -> &mut Map {
         self.buckets.get_mut(&bId).unwrap()
     }
-
 }
 
 #[cfg(test)]

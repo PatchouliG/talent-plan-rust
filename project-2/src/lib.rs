@@ -25,7 +25,7 @@ pub struct KvStore {
 
 impl KvStore {
     pub fn open(work_dir: &Path) -> Result<KvStore> {
-        let fm = FileManager::new(work_dir);
+        let (fm, sx) = FileManager::new(work_dir);
         let index = DBIndex::new();
         let fmLock = Arc::new(Mutex::new(fm));
         let indexMutex = Arc::new(Mutex::new(index));

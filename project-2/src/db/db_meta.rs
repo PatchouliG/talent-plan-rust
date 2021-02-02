@@ -53,7 +53,7 @@ impl DBMeta {
 
         let mut res = DBMeta { metaFile: dbFile.clone(), work_dir: work_dir.to_path_buf(), fileMetas: HashSet::new() };
 
-        for s in it {
+        for (s,_) in it {
             let c = serde_json::from_str::<MetaCommand>(&s).unwrap();
             res.updateMemory(&c);
         };

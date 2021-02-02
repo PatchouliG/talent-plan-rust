@@ -3,7 +3,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{SeekFrom, Write, Seek, Read};
 use std::path::{Path, PathBuf};
 use super::common::Result;
-use crate::db::common::{FileId, Command,  FileOffset};
+use crate::db::common::{FileId, Command, FileOffset};
 use crate::db::file_manager::ValueIndex;
 use clap::Format;
 
@@ -78,14 +78,15 @@ impl<'a> DBIter<'a> {
 }
 
 impl<'a> Iterator for DBIter<'a> {
-    type Item = String;
+    type Item = (String, FileOffset);
 
     fn next(&mut self) -> Option<Self::Item> {
+        let p = self.position;
         let (c, size) = self.db.get(self.position).ok()?;
         if size == 0 {
             return None;
         }
         self.position += size as FileOffset;
-        Some(c)
+        Some((c, p))
     }
 }

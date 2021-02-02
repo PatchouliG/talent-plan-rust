@@ -121,7 +121,7 @@ impl FileManager {
                 }
             };
         // update bucket write size
-        if (res.is_ok()) {
+        if res.is_ok() {
             let s = self.bucketSize.get(&bId).unwrap();
             let size = (*res.as_ref().unwrap() as usize) + *s;
             self.bucketSize.insert(bId, size);
@@ -150,6 +150,17 @@ impl FileManager {
                 let b = self.files.get(&snapshot.id).unwrap();
                 b.get(index)
             }
+        }
+    }
+
+    pub fn getDBIter(&self, bId: BucketId) -> DBIter {
+        let s = self.buckets.get(&bId).unwrap();
+        if let BucketMeta::Normal(n) = s {
+            let f = self.files.get(&n.id).unwrap();
+            let iter = DBIter::new(f);
+            iter
+        } else {
+            panic!("should be normal")
         }
     }
     pub fn startCompact(&mut self, bId: BucketId) {
@@ -279,5 +290,22 @@ mod testFm {
         //     todo check compact output
         //     todo check meta
         let a = 3;
+    }
+
+    #[test]
+    fn debug() {
+        struct test {}
+
+        impl test {
+            fn f(&mut self, i: i32) {
+                println!("{}", i)
+            }
+        }
+        let mut a = test {};
+        fn tt(t: &mut test, f: fn(&mut test, i32)) {
+            f(t, 8)
+        }
+
+        tt(&mut a, test::f)
     }
 }

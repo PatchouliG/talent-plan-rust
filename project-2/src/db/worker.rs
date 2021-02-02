@@ -1,10 +1,9 @@
 use std::collections::HashMap;
-use std::sync::{Arc, mpsc, Mutex};
+use std::sync::{Arc, mpsc, Mutex, MutexGuard};
 use std::sync::mpsc::{Receiver, Sender};
 
 use crate::db::common::{Command, FileId, toBucketId};
 use crate::db::db_file::DBFile;
-// use crate::db::db_meta::NormalFileMeta;
 use crate::db::file_manager::{FILE_SIZE_LIMIT, ValueIndex};
 use crate::db::index::DBIndex;
 
@@ -14,17 +13,14 @@ use super::file_manager::FileManager;
 pub struct RequestWorker {
     fmLock: Arc<Mutex<FileManager>>,
     index: Arc<Mutex<DBIndex>>,
-    // currentFileId: FileId,
-    // currentFile: DBFile,
-    currentFileSize: u64,
 }
 
 impl RequestWorker {
-    pub fn new(fm: Arc<Mutex<FileManager>>, index: Arc<Mutex<DBIndex>>) -> (RequestWorker) {
-        //     get all normal files from fm
-        //     build index
-        //     return
-        unimplemented!()
+    pub fn new(fm: Arc<Mutex<FileManager>>, index: Arc<Mutex<DBIndex>>) -> RequestWorker {
+        let mut res = RequestWorker { fmLock: fm, index };
+        // build index
+        res.load();
+        res
     }
     // call from lib
     pub fn handle_set(&mut self, key: &str, value: &str) -> Result<()> {
@@ -36,17 +32,100 @@ impl RequestWorker {
         let mut fm = self.fmLock.lock().unwrap();
         let mut map = self.index.lock().unwrap();
         let offset = fm.write(bucketId, &content)?;
-        // let index = ValueIndex { id: self.currentFileId, offset };
-        map.set(key.to_owned(), ValueIndex { offset });
-        unimplemented!()
+        map.set(key, offset);
+        Ok(())
     }
     pub fn handle_rm(&mut self, key: &str) -> Result<()> {
-        //     if file reach limit, get new file id from fm
-        //     set value
-        unimplemented!()
+        let mut index = self.index.lock().unwrap();
+        let mut fm = self.fmLock.lock().unwrap();
+        let bId = toBucketId(key);
+
+        let res = index.rm(key);
+        if !res {
+            return Ok(());
+        }
+        let c = Command::Remove(key.to_owned());
+        let content = serde_json::to_string(&c).unwrap();
+        fm.write(bId, &content)?;
+        Ok(())
     }
     pub fn handle_get(&self, key: &str) -> Result<Option<String>> {
-        unimplemented!()
+        let bId = toBucketId(key);
+        let index = self.index.lock().unwrap();
+        let fm = self.fmLock.lock().unwrap();
+
+        let res = index.get(key);
+
+        if let None = res {
+            return Ok(None);
+        }
+
+        let offset = res.unwrap();
+
+        let (content, _) = fm.read(bId, *offset)?;
+        let c = serde_json::from_str::<Command>(&content)?;
+
+        if let Command::Set(_, value) = c {
+            Ok(Some(value))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn load(&mut self) {
+        let fm = self.fmLock.lock().unwrap();
+    }
+}
+
+
+#[cfg(test)]
+mod testRequestWork {
+    use crate::db::worker::RequestWorker;
+    use crate::db::file_manager::FileManager;
+    use tempfile::TempDir;
+    use std::sync::{Arc, Mutex};
+    use crate::db::index::{DBIndex, BUCKET_SIZE};
+    use std::path::Path;
+
+    fn buildWorkDir(p: &Path) -> RequestWorker {
+        let (fm, rx) = FileManager::new(p);
+
+        let mut index = DBIndex::new();
+        for i in 0..BUCKET_SIZE {
+            let it = fm.getDBIter(i);
+            index.load(i, it);
+        }
+        let indexLock = Arc::new(Mutex::new(index));
+        let fmLock = Arc::new(Mutex::new(fm));
+        RequestWorker::new(fmLock, indexLock)
+    }
+
+    fn buildWork() -> RequestWorker {
+        let tmpDir = TempDir::new().unwrap();
+        buildWorkDir(tmpDir.path())
+    }
+
+    #[test]
+    fn testLoadEmpty() {
+        let w = buildWork();
+    }
+
+    #[test]
+    fn testLoad() {
+        let tmpDir = TempDir::new().unwrap();
+        let mut w = buildWorkDir(tmpDir.path());
+        w.handle_set("1", "1");
+        w.handle_set("2", "2");
+        w.handle_set("3", "3");
+        w.handle_rm("2");
+        drop(w);
+        let mut w = buildWorkDir(tmpDir.path());
+        assert_eq!(w.handle_get("1").unwrap().unwrap(), "1");
+        assert_eq!(w.handle_get("2").unwrap().is_none(), true);
+        assert_eq!(w.handle_get("3").unwrap().unwrap(), "3");
+        w.handle_rm("3");
+        assert_eq!(w.handle_get("3").unwrap().is_none(), true);
+        assert_eq!(w.handle_get("8").unwrap().is_none(), true);
     }
 }
 
