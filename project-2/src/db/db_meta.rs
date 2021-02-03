@@ -39,7 +39,7 @@ pub struct DBMeta {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum MetaCommand {
     Insert(FileMeta),
-    Delete(FileMeta),
+    Compact { output: FileMeta, inputs: Vec<FileMeta> },
 }
 
 impl DBMeta {
@@ -53,7 +53,7 @@ impl DBMeta {
 
         let mut res = DBMeta { metaFile: dbFile.clone(), work_dir: work_dir.to_path_buf(), fileMetas: HashSet::new() };
 
-        for (s,_) in it {
+        for (s, _) in it {
             let c = serde_json::from_str::<MetaCommand>(&s).unwrap();
             res.updateMemory(&c);
         };
@@ -73,8 +73,11 @@ impl DBMeta {
             MetaCommand::Insert(m) => {
                 self.fileMetas.insert(m);
             }
-            MetaCommand::Delete(m) => {
-                self.fileMetas.remove(&m);
+            MetaCommand::Compact { inputs, output } => {
+                for i in inputs {
+                    self.fileMetas.remove(&i);
+                }
+                self.fileMetas.insert(output);
             }
         }
     }
@@ -121,22 +124,23 @@ mod testDBMeta {
         dbMeta.update(MetaCommand::Insert(newFileMeta(1)));
         dbMeta.update(MetaCommand::Insert(newFileMeta(2)));
         dbMeta.update(MetaCommand::Insert(newFileMeta(3)));
-        // delete
-        dbMeta.update(MetaCommand::Delete(newFileMeta(2)));
+        // compact 1,2 to 4
+        dbMeta.update(MetaCommand::Compact { inputs: vec![newFileMeta(2), newFileMeta(1)], output: newFileMeta(4) });
         drop(dbMeta);
 
         // reopen
         let mut dbMeta = DBMeta::new(tmpDir.path());
 
         // add 4
-        dbMeta.update(MetaCommand::Insert(newFileMeta(4)));
+        dbMeta.update(MetaCommand::Insert(newFileMeta(5)));
 
         // check, should find 1,3,4
         let metas = dbMeta.listMeta().iter().map(|m| m.id).
             collect::<HashSet<FileId>>();
-        assert_eq!(metas.contains(&1), true);
+        assert_eq!(metas.contains(&1), false);
+        assert_eq!(metas.contains(&2), false);
         assert_eq!(metas.contains(&3), true);
         assert_eq!(metas.contains(&4), true);
-        assert_eq!(metas.contains(&2), false);
+        assert_eq!(metas.contains(&5), true);
     }
 }
