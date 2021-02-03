@@ -1,5 +1,5 @@
 use failure::_core::cell::RefCell;
-use std::fs::{File, OpenOptions};
+use std::fs::{File, OpenOptions, read_to_string};
 use std::io::{SeekFrom, Write, Seek, Read};
 use std::path::{Path, PathBuf};
 use super::common::Result;
@@ -48,7 +48,7 @@ impl DBFile {
         file_mut.flush()?;
         Result::Ok(res as FileOffset)
     }
-    pub fn get(&self, offset: FileOffset) -> Result<(String, usize)> {
+    pub fn get(&self, offset: FileOffset) -> Result<Option<(String, usize)>> {
         let mut file_mut = self.file.borrow_mut();
 
         let position = file_mut.seek(SeekFrom::Current(0))?;
@@ -58,11 +58,15 @@ impl DBFile {
 
         _size += file_mut.read(size_data)?;
         let a = usize::from_be_bytes(*size_data);
+
+        if a == 0 {
+            return Ok(None);
+        }
         let mut buffer = vec![0; a];
         _size += file_mut.read(&mut buffer)?;
 // restore position
         file_mut.seek(SeekFrom::Start(position))?;
-        Result::Ok((std::str::from_utf8(buffer.as_slice())?.to_owned(), _size))
+        Result::Ok(Some((std::str::from_utf8(buffer.as_slice())?.to_owned(), _size)))
     }
 }
 
@@ -82,10 +86,10 @@ impl<'a> Iterator for DBIter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let p = self.position;
-        let (c, size) = self.db.get(self.position).ok()?;
-        if size == 0 {
-            return None;
-        }
+        let (c, size) = self.db.get(self.position).unwrap()?;
+        // if size == 0 {
+        //     return None;
+        // }
         self.position += size as FileOffset;
         Some((c, p))
     }

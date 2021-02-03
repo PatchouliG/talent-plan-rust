@@ -32,7 +32,7 @@ pub type ValueIndex = FileOffset;
 const START_ID: FileId = 1;
 
 // 2mb
-pub const FILE_SIZE_LIMIT: usize = 1024 * 1024 * 2;
+pub const FILE_SIZE_LIMIT: usize = 1024 * 20;
 
 enum BucketMeta {
     Normal(FileMeta),
@@ -44,7 +44,7 @@ pub struct FileManager {
     meta: DBMeta,
     needCompact: Sender<BucketId>,
     buckets: HashMap<BucketId, BucketMeta>,
-    bucketSize: HashMap<BucketId, usize>,
+    bucketSize: HashMap<BucketId, bool>,
     files: HashMap<FileId, DBFile>,
 }
 
@@ -76,7 +76,7 @@ impl FileManager {
         let mut bucketSize = HashMap::new();
         for bid in 0..BUCKET_SIZE {
             // init size to zero
-            bucketSize.insert(bid, 0);
+            bucketSize.insert(bid, false);
 
             // init db in bucket
             if !buckets.contains_key(&bid) {
@@ -123,11 +123,13 @@ impl FileManager {
         // update bucket write size
         if res.is_ok() {
             let s = self.bucketSize.get(&bId).unwrap();
-            let size = (*res.as_ref().unwrap() as usize) + *s;
-            self.bucketSize.insert(bId, size);
+            let mut size = (*res.as_ref().unwrap() as usize);
             // create new file if read size limit ,and send need compact
-            if size > FILE_SIZE_LIMIT {
+            if size > FILE_SIZE_LIMIT && !*s {
                 self.needCompact.send(bId).unwrap();
+                size = size - FILE_SIZE_LIMIT;
+                self.bucketSize.insert(bId, true);
+                // self.bucketSize.insert(bId, size);
             }
         }
         res
@@ -137,18 +139,19 @@ impl FileManager {
         match bucketMeta {
             BucketMeta::Normal(m) => {
                 let file = self.files.get(&m.id).unwrap();
-                file.get(index)
+                let res = file.get(index)?;
+                res.ok_or(failure::format_err!("get not found"))
             }
             BucketMeta::Compacting { writeableFile, readOnly: snapshot } => {
                 // read writeable first
                 let a = self.files.get(&writeableFile.id).unwrap();
-                let res = a.get(index);
-                if res.is_ok() {
-                    return res;
+                let res = a.get(index)?;
+                if let Some(s) = res {
+                    Ok(s)
+                } else {
+                    let b = self.files.get(&snapshot.id).unwrap();
+                    return b.get(index)?.ok_or(failure::format_err!("get not found"));
                 }
-
-                let b = self.files.get(&snapshot.id).unwrap();
-                b.get(index)
             }
         }
     }
@@ -172,7 +175,7 @@ impl FileManager {
         // update meta
         self.meta.update(MetaCommand::Insert(fileMeta.clone()));
         //     set bucket size to zero
-        self.bucketSize.insert(bId, 0);
+        self.bucketSize.insert(bId, false);
 
         // add db file
         self.files.insert(id, dbFile);
@@ -183,6 +186,7 @@ impl FileManager {
             BucketMeta::Normal(mut n) => {
                 n.isSnapshot = true;
                 let w = FileMeta::new(id, bId, false);
+                n.isSnapshot = true;
                 let bucketMeta = BucketMeta::Compacting {
                     writeableFile: w,
                     readOnly: n,

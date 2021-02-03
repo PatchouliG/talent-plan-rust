@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, mpsc, Mutex, MutexGuard};
 use std::sync::mpsc::{Receiver, Sender};
 
-use crate::db::common::{Command, FileId, toBucketId};
+use crate::db::common::{Command, FileId, toBucketId, BucketId, FileOffset};
 use crate::db::db_file::DBFile;
 use crate::db::file_manager::{FILE_SIZE_LIMIT, ValueIndex};
 use crate::db::index::DBIndex;
@@ -131,30 +131,66 @@ mod testRequestWork {
 const BUFFER_SIZE_THRESH: usize = 3;
 
 pub struct CompactorWorker {
-    fm: Arc<Mutex<FileManager>>,
+    fmLock: Arc<Mutex<FileManager>>,
     index: DBIndex,
     // need compact
-    compact_rx: Receiver<FileId>,
+    compact_rx: Receiver<BucketId>,
     // buffer: Vec<FileId>,
 }
 
 impl CompactorWorker {
-    pub fn new(fm: Arc<Mutex<FileManager>>, index: DBIndex) -> Sender<FileId> {
-        let (tx, rx) = mpsc::channel::<FileId>();
+    pub fn new(fm: Arc<Mutex<FileManager>>, index: DBIndex, rx: Receiver<BucketId>) {
         // start thread
-        let mut res: CompactorWorker = CompactorWorker { fm, index, compact_rx: rx };
+        let mut res: CompactorWorker = CompactorWorker { fmLock: fm, index, compact_rx: rx };
         std::thread::spawn(move || res.handle_compact());
-        unimplemented!()
     }
     pub fn handle_compact(&mut self) {
         loop {
-            let mut buffer: Vec<FileId> = Vec::new();
-            let id = self.compact_rx.recv().unwrap();
-            buffer.push(id);
-            if buffer.len() < BUFFER_SIZE_THRESH { continue; }
-            //     read from index, bucket by bucket
-            //     write to fm
+            let bId = self.compact_rx.recv().unwrap();
+            let mut m = self.index.getMap(bId);
+            let mut fm = self.fmLock.lock().unwrap();
+            fm.startCompact(bId);
+            let keys = m.iter().map(|(a, b)| (a.clone(), b.clone())).collect::<Vec<(String, FileOffset)>>();
+            for (key, offset) in keys {
+                let (content, _) = fm.read(bId, offset).unwrap();
+                let c: Command = serde_json::from_str(&content).unwrap();
+                if let Command::Set(_, _) = c {
+                    let offset = fm.write(bId, &content).unwrap();
+                    m.insert(key.to_owned(), offset);
+                }
+            }
+            fm.compactFinish(bId);
         }
+    }
+}
+
+#[cfg(test)]
+mod testCompact {
+    use std::sync::{Arc, Mutex};
+    use crate::db::file_manager::FileManager;
+    use tempfile::TempDir;
+    use crate::db::index::DBIndex;
+    use crate::db::worker::CompactorWorker;
+    use crate::db::common::{toBucketId, Command};
+
+    #[test]
+    fn testCompact() {
+        let tmpDir = TempDir::new().unwrap();
+        let (mut fm, rx) = FileManager::new(tmpDir.path());
+        let fmLock = Arc::new(Mutex::new(fm));
+
+        let mut index = DBIndex::new();
+        let compactor = CompactorWorker::new(fmLock.clone(), index.clone(), rx);
+
+        let key = "key";
+        let value = "23333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333";
+        let bid = toBucketId(key);
+        let content = serde_json::to_string(&Command::Set(key.to_owned(), value.to_owned())).unwrap();
+        for i in 1..5000 {
+            let offset = fmLock.lock().unwrap().write(bid, &content).unwrap();
+            index.set(key, offset);
+        }
+        let a = 3;
     }
 }
 

@@ -28,7 +28,7 @@ impl DBIndex {
         }
         DBIndex { buckets }
     }
-    fn getMap(&self, bId: BucketId) -> MutexGuard<Map> {
+    pub fn getMap(&self, bId: BucketId) -> MutexGuard<Map> {
         self.buckets.get(bId as usize).unwrap().lock().unwrap()
     }
     pub fn set(&mut self, key: &str, fileOffset: FileOffset) {
@@ -48,16 +48,6 @@ impl DBIndex {
         let mut m = self.getMap(bId);
         m.remove(key).is_some()
     }
-
-    // used by compactor
-    // pub fn updateIndex(&mut self, key: &str, index: ValueIndex) {
-    //     let bId = toBucketId(key);
-    //     let m = self.getMap(bId);
-    //     m.insert(key.to_owned(), index);
-    // }
-    // pub fn resetKeyLog(&mut self, bId: BucketId) {
-    //     self.getKeyLog(bId).clear();
-    // }
 
     pub fn load(&mut self, bId: BucketId, iter: DBIter) {
         let mut m = self.getMap(bId);
