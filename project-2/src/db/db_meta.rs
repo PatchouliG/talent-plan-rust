@@ -12,21 +12,15 @@ const DB_META_FILE_NAME: &str = "meta.db";
 
 #[derive(Serialize, Deserialize, Debug, Clone, Hash, Eq, PartialEq)]
 pub struct FileMeta {
-    pub id: FileId,
-    pub bucketId: BucketId,
-    pub isSnapshot: bool,
+    pub id: FileId
 }
 
 impl FileMeta {
-    pub fn new(id: FileId, bucketId: BucketId, isSnapshot: bool) -> FileMeta {
-        FileMeta { id, bucketId, isSnapshot }
+    pub fn new(id: FileId) -> FileMeta {
+        FileMeta { id }
     }
-
     pub fn getId(&self) -> FileId {
         self.id
-    }
-    pub fn isSnapshot(&self) -> bool {
-        self.isSnapshot
     }
 }
 
@@ -36,10 +30,11 @@ pub struct DBMeta {
     fileMetas: HashSet<FileMeta>,
 }
 
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum MetaCommand {
     Insert(FileMeta),
-    Compact { output: FileMeta, inputs: Vec<FileMeta> },
+    Delete(FileMeta),
 }
 
 impl DBMeta {
@@ -60,7 +55,8 @@ impl DBMeta {
         return res;
     }
 
-    pub fn listMeta(&self) -> &HashSet<FileMeta> { &self.fileMetas }
+    // for test
+    fn listMeta(&self) -> &HashSet<FileMeta> { &self.fileMetas }
 
     pub fn update(&mut self, c: MetaCommand) {
         self.metaFile.write(&serde_json::to_string::<MetaCommand>(&c).unwrap()).unwrap();
@@ -73,13 +69,29 @@ impl DBMeta {
             MetaCommand::Insert(m) => {
                 self.fileMetas.insert(m);
             }
-            MetaCommand::Compact { inputs, output } => {
-                for i in inputs {
-                    self.fileMetas.remove(&i);
-                }
-                self.fileMetas.insert(output);
+            MetaCommand::Delete(m) => {
+                self.fileMetas.remove(&m);
             }
         }
+    }
+
+    pub fn dbSize(&self) -> u64 {
+        let res = self.fileMetas.iter().map(|f| { self.fileSize(f.id) }).sum();
+        res
+    }
+    pub fn idToPath(&self, id: &FileId) -> PathBuf {
+        let res = self.work_dir.join(Path::new(&id.to_string()));
+        res
+    }
+
+    pub fn fileSize(&self, id: FileId) -> u64 {
+        let p = self.idToPath(&id);
+        let m = std::fs::metadata(p).unwrap();
+        m.len()
+    }
+
+    pub fn maxID(&self) -> Option<FileId> {
+        self.fileMetas.iter().map(|f| f.id).max()
     }
 }
 
@@ -93,9 +105,10 @@ mod testDBMeta {
 
     use crate::db::common::FileId;
     use crate::db::db_meta::{DB_META_FILE_NAME, DBMeta, FileMeta, MetaCommand};
+    use std::io::Write;
 
     fn newFileMeta(id: FileId) -> FileMeta {
-        FileMeta::new(id, 0, false)
+        FileMeta::new(id)
     }
 
     #[test]
@@ -125,22 +138,37 @@ mod testDBMeta {
         dbMeta.update(MetaCommand::Insert(newFileMeta(2)));
         dbMeta.update(MetaCommand::Insert(newFileMeta(3)));
         // compact 1,2 to 4
-        dbMeta.update(MetaCommand::Compact { inputs: vec![newFileMeta(2), newFileMeta(1)], output: newFileMeta(4) });
+        dbMeta.update(MetaCommand::Delete(FileMeta::new(2)));
         drop(dbMeta);
 
         // reopen
         let mut dbMeta = DBMeta::new(tmpDir.path());
 
         // add 4
-        dbMeta.update(MetaCommand::Insert(newFileMeta(5)));
+        dbMeta.update(MetaCommand::Insert(newFileMeta(4)));
 
         // check, should find 1,3,4
         let metas = dbMeta.listMeta().iter().map(|m| m.id).
             collect::<HashSet<FileId>>();
-        assert_eq!(metas.contains(&1), false);
+        assert_eq!(metas.contains(&1), true);
         assert_eq!(metas.contains(&2), false);
         assert_eq!(metas.contains(&3), true);
         assert_eq!(metas.contains(&4), true);
-        assert_eq!(metas.contains(&5), true);
+
+        //     test max
+        assert_eq!(dbMeta.maxID().unwrap(), 4)
+    }
+
+    #[test]
+    fn testFileSize() {
+        let tmpDir = TempDir::new().unwrap();
+
+        let mut dbMeta = DBMeta::new(tmpDir.path());
+        dbMeta.update(MetaCommand::Insert(newFileMeta(1)));
+        let mut f = OpenOptions::new().write(true).create(true).
+            open(tmpDir.path().join("1")).unwrap();
+        f.write("123".as_bytes());
+        let size = dbMeta.fileSize(1);
+        assert_eq!(size, 3);
     }
 }
