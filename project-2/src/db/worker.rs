@@ -5,7 +5,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use crate::db::common::{Command, FileId, BucketId, FileOffset};
 use crate::db::db_file::{DBFile, DBIter};
 use crate::db::file_manager::{ValueIndex, FileManagerLock};
-use crate::db::index::{DBIndex, DBIndexLock, DBFileStatic};
+use crate::db::index::{DBIndex, DBIndexLock, DBFileStatistic};
 
 use super::common::Result;
 use super::file_manager::FileManager;
@@ -40,7 +40,7 @@ impl CompactorWorker {
             std::thread::sleep(Duration::new(10, 0));
             let (fm, index) = self.lockDB();
             let dfs = index.dbFileStatistic();
-            let needCompacts: Vec<&DBFileStatic> = dfs.iter().
+            let needCompacts: Vec<&DBFileStatistic> = dfs.iter().
                 filter(|f| f.usage() < CompactorWorker::USAGE_THRESHOLD).
                 collect();
             needCompacts.iter().map(|f| {

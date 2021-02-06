@@ -38,7 +38,7 @@ fn newDBIndexLock() -> DBIndexLock {
 
 // not thread safe, need lock
 impl DBIndex {
-    fn new() -> DBIndex {
+    pub fn new() -> DBIndex {
         DBIndex { map: HashMap::new(), statistic: HashMap::new() }
     }
     pub fn set(&mut self, key: &str, valueIndex: ValueIndex) {
