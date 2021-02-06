@@ -1,32 +1,32 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use crate::db::common::{BucketId, Command, FileOffset, FileId};
+use crate::db::common::{BucketId, Command, FileId, FileOffset};
 use crate::db::db_file::DBIter;
-use crate::db::file_manager::{FileManager, ValueIndex};
 use crate::db::db_meta::FileMeta;
+use crate::db::file_manager::{FileManager, Loader, ValueIndex};
 
-// value bone if rm
 type Map = HashMap<String, ValueIndex>;
-type KeyOperationSetFromRequestWork = HashSet<String>;
 
-pub struct DBFileStatic {
-    pub id: FileId,
+#[derive(Copy, Clone)]
+pub struct DBFileStatistic {
+    id: FileId,
     totalItem: u64,
     deadItem: u64,
-
 }
 
-impl DBFileStatic {
+impl DBFileStatistic {
+    pub fn new(id: FileId) -> DBFileStatistic {
+        DBFileStatistic { id, totalItem: 0, deadItem: 0 }
+    }
     pub fn usage(&self) -> f32 {
         1.0 - (self.deadItem as f32) / (self.totalItem as f32)
     }
 }
 
 pub struct DBIndex {
-    buckets: Map
-    // record key set/rm from request worker
-    // keysLog: HashMap<BucketId, KeyOperationSetFromRequestWork>,
+    map: Map,
+    statistic: HashMap<FileId, DBFileStatistic>,
 }
 
 pub type DBIndexLock = Arc<Mutex<DBIndex>>;
@@ -39,113 +39,102 @@ fn newDBIndexLock() -> DBIndexLock {
 // not thread safe, need lock
 impl DBIndex {
     fn new() -> DBIndex {
-        // let mut buckets: Vec<Arc<Mutex<Map>>> = Vec::new();
-        // for i in 0..BUCKET_SIZE {
-        //     buckets.push(Arc::new(Mutex::new(Map::new())));
-        // }
-        // DBIndex { buckets }
-        unimplemented!()
+        DBIndex { map: HashMap::new(), statistic: HashMap::new() }
     }
-    // pub fn getMap(&self, bId: BucketId) -> MutexGuard<Map> {
-    //     self.buckets.get(bId as usize).unwrap().lock().unwrap()
-    // }
     pub fn set(&mut self, key: &str, valueIndex: ValueIndex) {
-        unimplemented!()
-        // let bId = toBucketId(key);
-        // let mut m = self.getMap(bId);
-        //
-        // m.insert(key.to_owned(), fileOffset);
+        self.map.insert(key.to_owned(), valueIndex);
+        if !self.statistic.contains_key(&valueIndex.fileId) {
+            self.statistic.insert(valueIndex.fileId, DBFileStatistic::new(valueIndex.fileId));
+        }
+        self.statistic.get_mut(&valueIndex.fileId).unwrap().totalItem += 1;
     }
     pub fn get(&self, key: &str) -> Option<ValueIndex> {
-        unimplemented!()
-        // let bId = toBucketId(key);
-        // let m = self.getMap(bId);
-        // m.get(key).cloned()
+        self.map.get(key).map(|v| v.clone())
     }
     // return true if remove success
     pub fn rm(&mut self, key: &str) -> bool {
-        unimplemented!()
-        // let bId = toBucketId(key);
-        // let mut m = self.getMap(bId);
-        // m.remove(key).is_some()
+        let valueIndex = self.map.remove(key);
+        if valueIndex.is_some() {
+            let fId = valueIndex.unwrap().fileId;
+            self.statistic.get_mut(&fId).map(|s| s.deadItem += 1);
+        };
+        valueIndex.is_some()
     }
-    pub fn dbFileStatistic(&self) -> Vec<DBFileStatic> {
-        unimplemented!()
+    pub fn dbFileStatistic(&self) -> Vec<DBFileStatistic> {
+        self.statistic.iter().map(|(key, value)| value.clone()).
+            collect::<Vec<DBFileStatistic>>()
     }
+}
 
-
-    // pub fn load(&mut self, iter: DBIter) {
-    //     unimplemented!()
-    // let mut m = self.getMap(bId);
-    // for (a, b) in iter {
-    //     let c = serde_json::from_str::<Command>(&a).unwrap();
-    //     match c {
-    //         Command::Remove(key) => { m.remove(&key); }
-    //         Command::Set(key, value) => {
-    //             m.insert(key, b);
-    //         }
-    //         // ignore others
-    //         _ => {}
-    //     }
-    // }
-    // }
+impl Loader for DBIndex {
+    fn load(&mut self, content: &str, index: ValueIndex) {
+        let c = serde_json::from_str::<Command>(&content).unwrap();
+        match c {
+            Command::Set(key, _) => {
+                self.set(&key, index);
+            }
+            Command::Remove(key) => {
+                self.rm(&key);
+            }
+            // ignore
+            Command::Get(_) => {}
+        }
+    }
 }
 
 #[cfg(test)]
 mod testIndex {
-    //     use crate::db::common::toBucketId;
-//     use crate::db::index::DBIndex;
+    use std::collections::HashMap;
 
+    use crate::db::common::{Command, FileId};
+    use crate::db::file_manager::{Loader, ValueIndex};
+    use crate::db::index::{DBFileStatistic, DBIndex};
+
+    #[test]
+    fn testLoad() {
+        let source: Vec<(&str, ValueIndex)> = vec![("1", ValueIndex::new(1, 1)), ("2", ValueIndex::new(2, 2))];
+        let mut index = DBIndex::new();
+
+        for (key, value) in source {
+            let content = serde_json::to_string(&Command::Set(key.to_owned(), key.to_owned())).unwrap();
+            index.load(&content, value)
+        }
+
+        let res = index.get("1").unwrap();
+        assert_eq!(res.offset, 1);
+        assert_eq!(res.fileId, 1);
+    }
+
+    #[test]
     fn testOperation() {
-        //     test get set rm
+        let mut index = DBIndex::new();
+        index.set("a", ValueIndex::new(1, 1));
+        index.set("b", ValueIndex::new(2, 1));
+        let res = index.get("a").unwrap();
+        assert_eq!(res.fileId, 1);
+        assert_eq!(res.offset, 1);
+        let res = index.rm("a");
+        assert_eq!(res, true);
+
+        let res = index.get("a");
+        assert_eq!(res.is_none(), true);
     }
 
+    #[test]
     fn testFileStatistic() {
-        //     get set
-        //     get file statistic
-        //     check statistic
+        let mut index = DBIndex::new();
+        index.set("a", ValueIndex::new(1, 1));
+        index.set("b", ValueIndex::new(1, 1));
+        index.set("c", ValueIndex::new(1, 1));
+        index.set("d", ValueIndex::new(1, 1));
+        index.rm("b");
+        index.rm("b");
+        index.set("e", ValueIndex::new(1, 2));
+
+        let res = index.dbFileStatistic().iter().
+            map(|f| (f.id, *f)).collect::<HashMap<FileId, DBFileStatistic>>();
+
+        assert_eq!(res.get(&(1 as u64)).unwrap().usage(), 0.75);
+        assert_eq!(res.get(&(2 as u64)).unwrap().usage(), 1.0);
     }
-//
-//     #[test]
-//     fn testCallFromRequest() {
-//         let mut d = DBIndex::new();
-//         d.set("1", 1);
-//         d.set("2", 2);
-//         assert_eq!(d.get("2").unwrap(), 2);
-//         assert_eq!(d.get("1").unwrap(), 1);
-//
-//         d.rm("1");
-//         assert_eq!(d.get("1").is_none(), true);
-//     }
-//
-//
-//     #[test]
-//     fn testCompact() {
-//         // let mut d = DBIndex::new();
-//         // let mut d1 = d.clone();
-//         // let mut d2 = d.clone();
-//         // let h1 = std::thread::spawn(move || {
-//         //     d1.set("1", 1);
-//         //     d1.set("2", 2);
-//         //     d1.set("3", 3);
-//         // }
-//         // );
-//         // h1.join();
-//         // let h2 = std::thread::spawn(move || {
-//         //     let b = toBucketId("2");
-//         //     let mut m = d2.getMap(b);
-//         //     let keys = m.iter().map(|(s, _)| s.clone()).collect::<Vec<String>>();
-//         //     for key in keys {
-//         //         m.insert(key, 22);
-//         //     }
-//         // });
-//         //
-//         // h2.join();
-//         //
-//         // assert_eq!(d.get("1").unwrap(), 1);
-//         // assert_eq!(d.get("2").unwrap(), 22);
-//         // assert_eq!(d.get("3").unwrap(), 3);
-//
-//
-//     }
 }

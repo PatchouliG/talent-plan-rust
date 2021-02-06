@@ -22,14 +22,16 @@ use std::process::id;
 
 const FILE_SIZE_LIMIT: u64 = 1024 * 64;
 
-trait Loader {
-    fn load(&mut self, content: &str);
-}
-
+#[derive(Copy,Clone)]
 pub struct ValueIndex {
     pub offset: FileOffset,
     pub fileId: FileId,
 }
+
+pub trait Loader {
+    fn load(&mut self, content: &str, index: ValueIndex);
+}
+
 
 impl ValueIndex {
     pub fn new(offset: FileOffset, id: FileId) -> ValueIndex {
@@ -106,12 +108,14 @@ impl FileManager {
     pub fn load(&self, loader: &mut dyn Loader) {
         let mut fIds = self.getReadOnlyFiles();
         fIds.push(self.currentFileId);
-        let fs = fIds.iter().map(|i| self.idToFile(*i)).
-            collect::<Vec<DBFile>>();
-        fs.iter().for_each(|f| {
+
+        let fs = fIds.iter().map(|i| (*i, self.idToFile(*i))).
+            collect::<Vec<(FileId, DBFile)>>();
+
+        fs.iter().for_each(|(id, f)| {
             let it = DBIter::new(f);
-            for c in it {
-                loader.load(&c.0)
+            for (content, offset) in it {
+                loader.load(&content, ValueIndex::new(offset, *id));
             }
         });
     }
@@ -136,9 +140,9 @@ mod testFm {
 
     use tempfile::TempDir;
 
-    use crate::db::common::Command;
+    use crate::db::common::{Command, FileId};
     use crate::db::db_file::DBFile;
-    use crate::db::file_manager::{FileManager, Loader};
+    use crate::db::file_manager::{FileManager, Loader, ValueIndex};
     use std::panic::panic_any;
 
     fn buildContent() -> String {
@@ -217,7 +221,7 @@ mod testFm {
     }
 
     impl Loader for LoaderTest {
-        fn load(&mut self, content: &str) {
+        fn load(&mut self, content: &str, index: ValueIndex) {
             let c = serde_json::from_str::<Command>(content).unwrap();
             if let Command::Set(a, b) = c {
                 assert_eq!(a, self.key);
