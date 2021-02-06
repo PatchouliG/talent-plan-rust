@@ -29,6 +29,8 @@ impl DBFile {
         Result::Ok(DBFile { file, path: db_file_path.to_str().unwrap().to_owned(), end_position: len as usize })
     }
 
+    pub fn getPath(&self) -> String { self.path.clone() }
+
     pub fn delete(self) {
         std::fs::remove_file(self.path);
     }

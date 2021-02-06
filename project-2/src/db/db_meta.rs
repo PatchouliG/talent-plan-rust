@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -24,17 +24,19 @@ impl FileMeta {
     }
 }
 
+const START_ID: u64 = 1;
+
 pub struct DBMeta {
     metaFile: DBFile,
     work_dir: PathBuf,
-    fileMetas: HashSet<FileMeta>,
+    fileIds: HashSet<FileId>,
 }
 
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum MetaCommand {
-    Insert(FileMeta),
-    Delete(FileMeta),
+    Insert(FileId),
+    Delete(FileId),
 }
 
 impl DBMeta {
@@ -46,7 +48,7 @@ impl DBMeta {
         let dbFile = DBFile::new(p.as_path()).unwrap();
         let it = DBIter::new(&dbFile);
 
-        let mut res = DBMeta { metaFile: dbFile.clone(), work_dir: work_dir.to_path_buf(), fileMetas: HashSet::new() };
+        let mut res = DBMeta { metaFile: dbFile.clone(), work_dir: work_dir.to_path_buf(), fileIds: HashSet::new() };
 
         for (s, _) in it {
             let c = serde_json::from_str::<MetaCommand>(&s).unwrap();
@@ -55,8 +57,7 @@ impl DBMeta {
         return res;
     }
 
-    // for test
-    fn listMeta(&self) -> &HashSet<FileMeta> { &self.fileMetas }
+    pub fn listFileIds(&self) -> &HashSet<FileId> { &self.fileIds }
 
     pub fn update(&mut self, c: MetaCommand) {
         self.metaFile.write(&serde_json::to_string::<MetaCommand>(&c).unwrap()).unwrap();
@@ -67,31 +68,48 @@ impl DBMeta {
         let cl = c.clone();
         match cl {
             MetaCommand::Insert(m) => {
-                self.fileMetas.insert(m);
+                self.fileIds.insert(m);
             }
             MetaCommand::Delete(m) => {
-                self.fileMetas.remove(&m);
+                self.fileIds.remove(&m);
             }
         }
     }
 
-    pub fn dbSize(&self) -> u64 {
-        let res = self.fileMetas.iter().map(|f| { self.fileSize(f.id) }).sum();
+    pub fn newFileId(&mut self) -> FileId {
+        let res = self.maxID().map(|id| id + 1).unwrap_or(START_ID);
+        self.update(MetaCommand::Insert(res));
         res
     }
-    pub fn idToPath(&self, id: &FileId) -> PathBuf {
+
+    pub fn idToDBFile(&self, id: FileId) -> DBFile {
+        let p = self.idToPath(id);
+        DBFile::new(&p.as_path()).unwrap()
+    }
+
+
+    pub fn dbSize(&self) -> u64 {
+        let res = self.fileIds.iter().map(|f| { self.fileSize(*f) }).sum();
+        res
+    }
+    pub fn idToPath(&self, id: FileId) -> PathBuf {
         let res = self.work_dir.join(Path::new(&id.to_string()));
         res
     }
 
     pub fn fileSize(&self, id: FileId) -> u64 {
-        let p = self.idToPath(&id);
+        let p = self.idToPath(id);
         let m = std::fs::metadata(p).unwrap();
         m.len()
     }
 
     pub fn maxID(&self) -> Option<FileId> {
-        self.fileMetas.iter().map(|f| f.id).max()
+        let mut res = None;
+        self.fileIds.iter().
+            for_each(|a| if res.is_none() || *a > res.unwrap() {
+                res = Some(*a);
+            });
+        res
     }
 }
 
@@ -104,15 +122,15 @@ mod testDBMeta {
     use tempfile::TempDir;
 
     use crate::db::common::FileId;
-    use crate::db::db_meta::{DB_META_FILE_NAME, DBMeta, FileMeta, MetaCommand};
+    use crate::db::db_meta::{DB_META_FILE_NAME, DBMeta, FileMeta, MetaCommand, START_ID};
     use std::io::Write;
 
-    fn newFileMeta(id: FileId) -> FileMeta {
+    fn new_file_meta(id: FileId) -> FileMeta {
         FileMeta::new(id)
     }
 
     #[test]
-    fn testCreateMeta() {
+    fn test_create_meta() {
         let tmpDir = TempDir::new().unwrap();
         let p = tmpDir.path().join(Path::new(DB_META_FILE_NAME));
         assert_ne!(p.exists(), true);
@@ -121,7 +139,7 @@ mod testDBMeta {
     }
 
     #[test]
-    fn testOpenMeta() {
+    fn test_open_meta() {
         let tmpDir = TempDir::new().unwrap();
         let p = tmpDir.path().join(Path::new(DB_META_FILE_NAME));
         OpenOptions::new().create(true).write(true).open(p.as_path()).unwrap();
@@ -130,25 +148,25 @@ mod testDBMeta {
     }
 
     #[test]
-    fn testModifyMeta() {
+    fn test_modify_meta() {
         let tmpDir = TempDir::new().unwrap();
-        let mut dbMeta = DBMeta::new(tmpDir.path());
+        let mut db_meta = DBMeta::new(tmpDir.path());
         // add 1,2,3
-        dbMeta.update(MetaCommand::Insert(newFileMeta(1)));
-        dbMeta.update(MetaCommand::Insert(newFileMeta(2)));
-        dbMeta.update(MetaCommand::Insert(newFileMeta(3)));
+        db_meta.update(MetaCommand::Insert(1));
+        db_meta.update(MetaCommand::Insert(2));
+        db_meta.update(MetaCommand::Insert(3));
         // compact 1,2 to 4
-        dbMeta.update(MetaCommand::Delete(FileMeta::new(2)));
-        drop(dbMeta);
+        db_meta.update(MetaCommand::Delete(2));
+        drop(db_meta);
 
         // reopen
         let mut dbMeta = DBMeta::new(tmpDir.path());
 
         // add 4
-        dbMeta.update(MetaCommand::Insert(newFileMeta(4)));
+        dbMeta.update(MetaCommand::Insert(4));
 
         // check, should find 1,3,4
-        let metas = dbMeta.listMeta().iter().map(|m| m.id).
+        let metas = dbMeta.listFileIds().iter().map(|m| *m).
             collect::<HashSet<FileId>>();
         assert_eq!(metas.contains(&1), true);
         assert_eq!(metas.contains(&2), false);
@@ -160,15 +178,28 @@ mod testDBMeta {
     }
 
     #[test]
-    fn testFileSize() {
+    fn test_file_size() {
         let tmpDir = TempDir::new().unwrap();
-
         let mut dbMeta = DBMeta::new(tmpDir.path());
-        dbMeta.update(MetaCommand::Insert(newFileMeta(1)));
+        dbMeta.update(MetaCommand::Insert(1));
         let mut f = OpenOptions::new().write(true).create(true).
             open(tmpDir.path().join("1")).unwrap();
         f.write("123".as_bytes());
         let size = dbMeta.fileSize(1);
         assert_eq!(size, 3);
+    }
+
+    #[test]
+    fn test_new_file_id() {
+        let tmpDir = TempDir::new().unwrap();
+        let mut db_meta = DBMeta::new(tmpDir.path());
+        let res = db_meta.newFileId();
+        assert_eq!(res, START_ID);
+        let res = db_meta.newFileId();
+        assert_eq!(res, START_ID + 1);
+        drop(db_meta);
+        let mut db_meta = DBMeta::new(tmpDir.path());
+        let res = db_meta.newFileId();
+        assert_eq!(res, START_ID + 2);
     }
 }

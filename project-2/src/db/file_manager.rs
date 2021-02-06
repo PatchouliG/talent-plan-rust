@@ -10,306 +10,254 @@ use log::{info, warn};
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::map::Entry::Vacant;
+use tempfile::TempDir;
 
 use crate::db::db_file::{DBFile, DBIter};
 use crate::db::db_meta::{DBMeta, FileMeta, MetaCommand};
-use crate::db::index::BUCKET_SIZE;
 
 use super::common::*;
 use super::index;
+use std::sync::{Mutex, Arc};
+use std::process::id;
 
-fn idToPath(id: &FileId, work_dir: &PathBuf) -> PathBuf {
-    let res = work_dir.join(Path::new(&id.to_string()));
-    res
+const FILE_SIZE_LIMIT: u64 = 1024 * 64;
+
+trait Loader {
+    fn load(&mut self, content: &str);
 }
 
-pub type ValueIndex = FileOffset;
+pub struct ValueIndex {
+    pub offset: FileOffset,
+    pub fileId: FileId,
+}
 
-// pub struct ValueIndex {
-//     pub offset: FileOffset,
-// }
+impl ValueIndex {
+    pub fn new(offset: FileOffset, id: FileId) -> ValueIndex {
+        ValueIndex { offset, fileId: id }
+    }
+}
 
 const START_ID: FileId = 1;
 
-// 2mb
-pub const FILE_SIZE_LIMIT: usize = 1024 * 20;
-
-enum BucketMeta {
-    Normal(FileMeta),
-    Compacting { writeableFile: FileMeta, readOnly: FileMeta },
-}
+pub type FileManagerLock = Arc<Mutex<FileManager>>;
 
 pub struct FileManager {
-    nextId: FileId,
+    currentFile: DBFile,
+    currentFileId: FileId,
     meta: DBMeta,
-    needCompact: Sender<BucketId>,
-    buckets: HashMap<BucketId, BucketMeta>,
-    bucketSize: HashMap<BucketId, bool>,
-    files: HashMap<FileId, DBFile>,
+    readOnlyFiles: HashMap<FileId, DBFile>,
+    sizeLimit: u64,
 }
 
 impl FileManager {
-    pub fn new(workDir: &Path) -> (FileManager, Receiver<BucketId>) {
-        let mut dbMeta = DBMeta::new(workDir);
-        let metas = dbMeta.listMeta();
-        let mut nextFileId = metas.iter().map(|m| m.getId()).
-            max().unwrap_or(START_ID);
-        let mut current = None;
-        if nextFileId != START_ID.clone() {
-            current = Some(nextFileId - 1);
+    pub fn new(workDir: &Path) -> FileManager {
+        FileManager::newFmWithSize(workDir, FILE_SIZE_LIMIT)
+    }
+    pub fn newFmWithSize(workDir: &Path, limit: u64) -> FileManager {
+        let mut meta = DBMeta::new(workDir);
+        let maxFileId = meta.maxID();
+        let currentId = match maxFileId {
+            None => { meta.newFileId() }
+            Some(f) => { f }
         };
-        // todo delete unused file
-        let (sx, rx) = std::sync::mpsc::channel();
-        let mut buckets: HashMap<FileId, BucketMeta> = HashMap::new();
-        let mut files: HashMap<FileId, DBFile> = HashMap::new();
+        let currentFile = DBFile::new(&meta.idToPath(currentId)).unwrap();
 
-        for fileMeta in metas.iter() {
-            // ignore snapshot
-            if fileMeta.isSnapshot() {
-                continue;
-            }
-            buckets.insert(fileMeta.bucketId, BucketMeta::Normal(fileMeta.clone()));
-            files.insert(fileMeta.id, DBFile::new(&idToPath(&fileMeta.id,
-                                                            &workDir.to_path_buf())).unwrap());
-        }
-
-        let mut bucketSize = HashMap::new();
-        for bid in 0..BUCKET_SIZE {
-            // init size to zero
-            bucketSize.insert(bid, false);
-
-            // init db in bucket
-            if !buckets.contains_key(&bid) {
-                let fileId = nextFileId;
-                nextFileId += 1;
-                let f = FileMeta::new(fileId, bid, false);
-                buckets.insert(bid, BucketMeta::Normal(f.clone()));
-                files.insert(fileId, DBFile::new(&idToPath(&fileId,
-                                                           &workDir.to_path_buf())).unwrap());
-                dbMeta.update(MetaCommand::Insert(f));
-            }
-        }
-
-        let res = FileManager {
-            nextId: nextFileId,
-            meta: dbMeta,
-            needCompact: sx,
-            buckets: buckets,
-            files: files,
-            bucketSize: bucketSize,
-        };
-        (res, rx)
+        let mut readOnlyFiles = HashMap::new();
+        meta.listFileIds().iter().
+            filter(|id| **id != currentId).
+            for_each(|id| {
+                readOnlyFiles.insert(*id, meta.idToDBFile(*id));
+            });
+        FileManager { currentFile, currentFileId: currentId, meta, readOnlyFiles, sizeLimit: limit }
     }
 
-    fn nextId(&mut self) -> FileId {
-        let res = self.nextId;
-        self.nextId += 1;
-        res
-    }
-    pub fn write(&mut self, bId: BucketId, content: &str) -> Result<FileOffset> {
-        // write to current file
-        let mut bucketMeta = self.buckets.get(&bId).unwrap();
-        let res =
-            match bucketMeta {
-                BucketMeta::Normal(m) => {
-                    let f = self.files.get_mut(&m.id).unwrap();
-                    f.write(content)
-                }
-                BucketMeta::Compacting { writeableFile, readOnly: snapshot } => {
-                    let f = self.files.get_mut(&writeableFile.id).unwrap();
-                    f.write(content)
-                }
-            };
-        // update bucket write size
-        if res.is_ok() {
-            let s = self.bucketSize.get(&bId).unwrap();
-            let mut size = (*res.as_ref().unwrap() as usize);
-            // create new file if read size limit ,and send need compact
-            if size > FILE_SIZE_LIMIT && !*s {
-                self.needCompact.send(bId).unwrap();
-                size = size - FILE_SIZE_LIMIT;
-                self.bucketSize.insert(bId, true);
-                // self.bucketSize.insert(bId, size);
-            }
+    // write to current db file
+    // use new db file when size reach limit
+    pub fn writeToCurrent(&mut self, content: &str) -> Result<ValueIndex> {
+        let offset = self.currentFile.write(content)?;
+        if offset > self.sizeLimit {
+            let id = self.meta.newFileId();
+            self.readOnlyFiles.insert(self.currentFileId, self.meta.idToDBFile(self.currentFileId));
+            self.currentFile = self.meta.idToDBFile(id);
+            self.currentFileId = id;
         }
-        res
+        Ok(ValueIndex::new(offset, self.currentFileId))
     }
-    pub fn read(&self, bId: BucketId, index: ValueIndex) -> Result<(String, usize)> {
-        let bucketMeta = self.buckets.get(&bId).unwrap();
-        match bucketMeta {
-            BucketMeta::Normal(m) => {
-                let file = self.files.get(&m.id).unwrap();
-                let res = file.get(index)?;
-                res.ok_or(failure::format_err!("get not found"))
-            }
-            BucketMeta::Compacting { writeableFile, readOnly: snapshot } => {
-                // read writeable first
-                let a = self.files.get(&writeableFile.id).unwrap();
-                let res = a.get(index)?;
-                if let Some(s) = res {
-                    Ok(s)
-                } else {
-                    let b = self.files.get(&snapshot.id).unwrap();
-                    return b.get(index)?.ok_or(failure::format_err!("get not found"));
-                }
-            }
-        }
-    }
-
-    pub fn getDBIter(&self, bId: BucketId) -> DBIter {
-        let s = self.buckets.get(&bId).unwrap();
-        if let BucketMeta::Normal(n) = s {
-            let f = self.files.get(&n.id).unwrap();
-            let iter = DBIter::new(f);
-            iter
+    pub fn read(&self, index: ValueIndex) -> Result<Option<(String, usize)>> {
+        let p = self.readOnlyFiles.get(&index.fileId);
+        if let Some(f) = p
+        {
+            f.get(index.offset)
+        } else if self.currentFileId == index.fileId {
+            self.currentFile.get(index.offset)
         } else {
-            panic!("should be normal")
+            Err(failure::format_err!("fileId not Found"))
         }
     }
-    pub fn startCompact(&mut self, bId: BucketId) {
-        let id = self.nextId();
-        let p = idToPath(&id, &self.meta.workDir());
-        let dbFile = DBFile::new(&p).unwrap();
-        let fileMeta = FileMeta::new(id, bId, false);
 
-        // update meta
-        self.meta.update(MetaCommand::Insert(fileMeta.clone()));
-        //     set bucket size to zero
-        self.bucketSize.insert(bId, false);
-
-        // add db file
-        self.files.insert(id, dbFile);
-
-        // update bucket meta
-        let bm = self.buckets.remove(&bId).unwrap();
-        let newBm = match bm {
-            BucketMeta::Normal(mut n) => {
-                n.isSnapshot = true;
-                let w = FileMeta::new(id, bId, false);
-                n.isSnapshot = true;
-                let bucketMeta = BucketMeta::Compacting {
-                    writeableFile: w,
-                    readOnly: n,
-                };
-                bucketMeta
-            }
-            BucketMeta::Compacting { writeableFile, readOnly } => {
-                panic!();
-            }
-        };
-        self.buckets.insert(bId, newBm);
+    pub fn getReadOnlyFiles(&self) -> Vec<FileId> {
+        self.readOnlyFiles.iter().map(|e| *e.0).collect()
     }
-    // pub fn createSnapshot(&self, bId: BucketId) {}
-    pub fn compactFinish(&mut self, bId: BucketId) {
-        let f = self.buckets.get(&bId).unwrap();
 
-        if let BucketMeta::Compacting { writeableFile, readOnly: snapshot } = f {
-            self.meta.update(MetaCommand::Delete(snapshot.clone()));
-            let f = self.files.remove(&snapshot.getId()).unwrap();
-            // discard snapshot
-            f.delete();
-            self.buckets.insert(bId, BucketMeta::Normal(writeableFile.clone()));
-        } else {
-            panic!("snapshot file not found")
-        }
+    pub fn idToFile(&self, id: FileId) -> DBFile { self.meta.idToDBFile(id) }
+    pub fn idToPath(&self, id: FileId) -> PathBuf { self.meta.idToPath(id) }
+
+    // todo return all db files
+    pub fn load(&self, loader: &mut dyn Loader) {
+        let mut fIds = self.getReadOnlyFiles();
+        fIds.push(self.currentFileId);
+        let fs = fIds.iter().map(|i| self.idToFile(*i)).
+            collect::<Vec<DBFile>>();
+        fs.iter().for_each(|f| {
+            let it = DBIter::new(f);
+            for c in it {
+                loader.load(&c.0)
+            }
+        });
+    }
+    // delete file, for compact
+    pub fn deleteDBFIle(&mut self, id: FileId) {
+        // can't delete current file
+        assert_ne!(id, self.currentFileId);
+        self.meta.update(MetaCommand::Delete(id));
+        self.readOnlyFiles.remove(&id);
+        std::fs::remove_file(self.meta.idToPath(id)).unwrap();
     }
 
     // need test
     fn deleteUnusedFiles(&self) {
-        let paths = std::fs::read_dir(&self.meta.workDir()).unwrap();
-        let set = self.meta.listMeta().iter().map(|m| m.id).
-            collect::<HashSet<FileId>>();
-
-        for path in paths {
-            let name = path.unwrap().file_name().to_str().unwrap().to_owned();
-            // try parse name to id
-            let res = name.parse::<u64>();
-            // parse success
-            if let Ok(i) = res {
-                // delete if not found
-                if !set.contains(&i) {
-                    std::fs::remove_file(&name);
-                    info!("delete file {}", &name);
-                }
-            }
-        }
+        unimplemented!()
     }
 }
 
 #[cfg(test)]
 mod testFm {
+    const FILE_SIZE_LIMIT: u64 = 512;
+
     use tempfile::TempDir;
 
-    use crate::db::file_manager::FileManager;
+    use crate::db::common::Command;
+    use crate::db::db_file::DBFile;
+    use crate::db::file_manager::{FileManager, Loader};
+    use std::panic::panic_any;
+
+    fn buildContent() -> String {
+        let c = Command::Set("key".to_owned(), "value".to_owned());
+        let content = serde_json::to_string(&c).unwrap();
+        content
+    }
+
+    fn writeToFm(fm: &mut FileManager) {
+        let c = buildContent();
+        // write until create new file
+        for i in 1..50 {
+            fm.writeToCurrent(&c).unwrap();
+        }
+    }
 
     #[test]
     fn testNewFileManager() {
         let tmpDir = TempDir::new().unwrap();
-        let (mut fm, _) = FileManager::new(tmpDir.path());
-        fm.write(3, "234");
-        //     todo check file in tmp dir
+        let mut fm = FileManager::newFmWithSize(tmpDir.path(), FILE_SIZE_LIMIT);
+        let content = buildContent();
+        fm.writeToCurrent(&content);
+        fm.writeToCurrent(&content);
+        fm.writeToCurrent(&content);
+
+        let cf = fm.currentFile.getPath();
+
+        use std::path::Path;
+        let size = std::fs::metadata(Path::new(&cf)).unwrap().len();
+        assert_eq!(size, 93)
     }
 
     #[test]
     fn testReOpenFileManager() {
         let tmpDir = TempDir::new().unwrap();
-        let (mut fm, _) = FileManager::new(tmpDir.path());
+        let mut fm = FileManager::newFmWithSize(tmpDir.path(), FILE_SIZE_LIMIT);
+        let content = buildContent();
+        let path = fm.meta.workDir();
+        let content = buildContent();
+        fm.writeToCurrent(&content);
         drop(fm);
-        let (mut fm, _) = FileManager::new(tmpDir.path());
-        //     check files and content in dir
+        let mut fm = FileManager::new(&path);
     }
 
     #[test]
     fn testWriteToLimitFileManager() {
         let tmpDir = TempDir::new().unwrap();
-        let (mut fm, rx) = FileManager::new(tmpDir.path());
-        let s = String::from("2333333333333333333333333333333333333333333333333");
-        let mut count = 0;
-        loop {
-            fm.write(1, &s);
-            count += 1;
-            if count > 1000 {
-                panic!("fail")
-            }
-            let res = rx.try_recv();
-            if res.is_ok() {
-                return;
-            }
-        }
+        let mut fm = FileManager::newFmWithSize(tmpDir.path(), FILE_SIZE_LIMIT);
+        writeToFm(&mut fm);
+        let files = fm.getReadOnlyFiles();
+        assert_eq!(files.len(), 2)
     }
 
     #[test]
-    fn testCompactFileManager() {
+    fn testDelete() {
         let tmpDir = TempDir::new().unwrap();
-        let (mut fm, rx) = FileManager::new(tmpDir.path());
-        fm.write(1, "234");
-        fm.write(1, "345");
-        // start compact
-        fm.startCompact(1);
-        fm.write(1, "88");
-        fm.compactFinish(1);
-        // write 456
-        // end compact
-        //     todo check file is deleted
-        //     todo check compact output
-        //     todo check meta
-        let a = 3;
+        let mut fm = FileManager::newFmWithSize(tmpDir.path(), FILE_SIZE_LIMIT);
+        // let fileMeta = fm.newDBFile();
+        // let mut dbFile = DBFile::new(&idToPath(&fileMeta.id, &tmpDir.into_path())).unwrap();
+        writeToFm(&mut fm);
+        let rf = fm.getReadOnlyFiles();
+        assert_eq!(rf.len() > 0, true);
+        let fId = rf.get(0).unwrap();
+        fm.deleteDBFIle(*fId);
+
+        let p = fm.idToPath(*fId);
+
+        //     check if is delete
+        assert_eq!(std::path::Path::new(&p).exists(), false);
+    }
+
+
+    struct LoaderTest {
+        key: String,
+        value: String,
+    }
+
+    impl Loader for LoaderTest {
+        fn load(&mut self, content: &str) {
+            let c = serde_json::from_str::<Command>(content).unwrap();
+            if let Command::Set(a, b) = c {
+                assert_eq!(a, self.key);
+                assert_eq!(b, self.value)
+            }
+        }
     }
 
     #[test]
-    fn debug() {
-        struct test {}
-
-        impl test {
-            fn f(&mut self, i: i32) {
-                println!("{}", i)
-            }
-        }
-        let mut a = test {};
-        fn tt(t: &mut test, f: fn(&mut test, i32)) {
-            f(t, 8)
-        }
-
-        tt(&mut a, test::f)
+    fn testLoad() {
+        let tmpDir = TempDir::new().unwrap();
+        let mut fm = FileManager::new(tmpDir.path());
+        writeToFm(&mut fm);
+        let mut l = LoaderTest { key: "key".to_owned(), value: "value".to_owned() };
+        fm.load(&mut l);
     }
+
+    #[test]
+    fn testRead() {
+        let tmpDir = TempDir::new().unwrap();
+        let mut fm = FileManager::newFmWithSize(tmpDir.path(), FILE_SIZE_LIMIT);
+        writeToFm(&mut fm);
+        let content = buildContent();
+        let index = fm.writeToCurrent(&content).unwrap();
+        writeToFm(&mut fm);
+        let res = fm.read(index).unwrap().unwrap().0;
+        let c = serde_json::from_str::<Command>(&res).unwrap();
+        if let Command::Set(key, value) = c {
+            assert_eq!(key, "key");
+            assert_eq!(value, "value");
+        } else {
+            panic!("match fail")
+        }
+    }
+
+    // fn buildFM() -> FileManager {
+    //     let tmpDir = TempDir::new().unwrap();
+    //     let mut fm = FileManager::newFmWithSize(tmpDir.path(), FILE_SIZE_LIMIT);
+    //     fm
+    // }
 }
+// }
+

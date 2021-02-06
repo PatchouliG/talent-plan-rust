@@ -7,11 +7,10 @@ use db::common::Command;
 use db::db_file::DBFile;
 use db::db_file::DBIter;
 use db::index::DBIndex;
-use db::worker::RequestWorker;
 
 use crate::db::file_manager::FileManager;
 use crate::db::worker::CompactorWorker;
-use crate::db::index::BUCKET_SIZE;
+use crate::db::request_worker::RequestWorker;
 
 mod db;
 
@@ -26,16 +25,17 @@ pub struct KvStore {
 
 impl KvStore {
     pub fn open(work_dir: &Path) -> Result<KvStore> {
-        let (fm, sx) = FileManager::new(work_dir);
-        let mut index = DBIndex::new();
-        for i in 0..BUCKET_SIZE {
-            let it = fm.getDBIter(i);
-            index.load(i, it);
-        }
-        let fmLock = Arc::new(Mutex::new(fm));
-        let worker = RequestWorker::new(fmLock.clone(), index.clone());
-        // CompactorWorker::new(fmLock.clone(), index.clone());
-        Ok(KvStore { worker })
+        unimplemented!()
+        // let fm = FileManager::new(work_dir);
+        // let mut index = DBIndex::new();
+        // for i in 0..BUCKET_SIZE {
+        //     // let it = fm.getDBIter(i);
+        //     // index.load(i, it);
+        // }
+        // let fmLock = Arc::new(Mutex::new(fm));
+        // let worker = RequestWorker::new(fmLock.clone(), index.clone());
+        // // CompactorWorker::new(fmLock.clone(), index.clone());
+        // Ok(KvStore { worker })
     }
     pub fn get(&self, key: String) -> Result<Option<String>> {
         self.worker.handle_get(&key)
