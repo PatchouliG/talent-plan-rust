@@ -22,7 +22,7 @@ use std::process::id;
 
 const FILE_SIZE_LIMIT: u64 = 1024 * 64;
 
-#[derive(Copy,Clone)]
+#[derive(Copy, Clone)]
 pub struct ValueIndex {
     pub offset: FileOffset,
     pub fileId: FileId,
@@ -99,6 +99,10 @@ impl FileManager {
 
     pub fn getReadOnlyFiles(&self) -> Vec<FileId> {
         self.readOnlyFiles.iter().map(|e| *e.0).collect()
+    }
+
+    pub fn isReadOnlyFile(&self, id: FileId) -> bool {
+        self.readOnlyFiles.contains_key(&id)
     }
 
     pub fn idToFile(&self, id: FileId) -> DBFile { self.meta.idToDBFile(id) }

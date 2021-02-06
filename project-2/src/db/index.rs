@@ -22,6 +22,9 @@ impl DBFileStatistic {
     pub fn usage(&self) -> f32 {
         1.0 - (self.deadItem as f32) / (self.totalItem as f32)
     }
+    pub fn id(&self) -> FileId {
+        self.id
+    }
 }
 
 pub struct DBIndex {
@@ -42,9 +45,12 @@ impl DBIndex {
         DBIndex { map: HashMap::new(), statistic: HashMap::new() }
     }
     pub fn set(&mut self, key: &str, valueIndex: ValueIndex) {
-        self.map.insert(key.to_owned(), valueIndex);
+        let res = self.map.insert(key.to_owned(), valueIndex).is_some();
         if !self.statistic.contains_key(&valueIndex.fileId) {
             self.statistic.insert(valueIndex.fileId, DBFileStatistic::new(valueIndex.fileId));
+        }
+        if res {
+            self.statistic.get_mut(&valueIndex.fileId).unwrap().deadItem += 1;
         }
         self.statistic.get_mut(&valueIndex.fileId).unwrap().totalItem += 1;
     }
@@ -130,11 +136,14 @@ mod testIndex {
         index.rm("b");
         index.rm("b");
         index.set("e", ValueIndex::new(1, 2));
+        index.set("e", ValueIndex::new(2, 2));
+        index.set("e", ValueIndex::new(3, 2));
+        index.set("e", ValueIndex::new(4, 2));
 
         let res = index.dbFileStatistic().iter().
             map(|f| (f.id, *f)).collect::<HashMap<FileId, DBFileStatistic>>();
 
         assert_eq!(res.get(&(1 as u64)).unwrap().usage(), 0.75);
-        assert_eq!(res.get(&(2 as u64)).unwrap().usage(), 1.0);
+        assert_eq!(res.get(&(2 as u64)).unwrap().usage(), 0.25);
     }
 }

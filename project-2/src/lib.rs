@@ -11,15 +11,17 @@ use db::index::DBIndex;
 use crate::db::file_manager::{FileManager, FileManagerLock};
 use crate::db::index::DBIndexLock;
 use crate::db::request_worker::RequestWorker;
-use crate::db::worker::CompactorWorker;
+use crate::db::compacte_worker::CompactorWorker;
+use crate::db::lock_manager::LockManager;
 
 mod db;
 
 pub type Result<T> = db::common::Result<T>;
 
 pub struct KvStore {
-    fmMutex: FileManagerLock,
-    indexMutex: DBIndexLock,
+    // fmMutex: FileManagerLock,
+    // indexMutex: DBIndexLock,
+    lm: LockManager
 }
 
 
@@ -31,25 +33,20 @@ impl KvStore {
         let fm = FileManager::new(work_dir);
         let mut index = DBIndex::new();
         fm.load(&mut index);
-        Ok(KvStore { fmMutex: Arc::new(Mutex::new(fm)), indexMutex: Arc::new(Mutex::new(index)) })
-    }
-
-    fn getLocker(&self) -> (MutexGuard<FileManager>, MutexGuard<DBIndex>) {
-        let fm = self.fmMutex.lock().unwrap();
-        let index = self.indexMutex.lock().unwrap();
-        (fm, index)
+        let lm = LockManager::new(fm, index);
+        Ok(KvStore { lm })
     }
 
     pub fn get(&self, key: String) -> Result<Option<String>> {
-        let (a, b) = self.getLocker();
+        let (a, b) = self.lm.get();
         RequestWorker::new(a, b).handle_get(&key)
     }
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        let (a, b) = self.getLocker();
+        let (a, b) = self.lm.get();
         RequestWorker::new(a, b).handle_set(&key, &value)
     }
     pub fn remove(&mut self, key: String) -> Result<()> {
-        let (a, b) = self.getLocker();
+        let (a, b) = self.lm.get();
         RequestWorker::new(a, b).handle_rm(&key)
     }
 }
