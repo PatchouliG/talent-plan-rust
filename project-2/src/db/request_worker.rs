@@ -29,7 +29,7 @@ impl<'a> RequestWorker<'a> {
         let c = Command::Remove(key.to_owned());
         let res = self.index.rm(key);
         if !res {
-            return Ok(());
+            return Err(failure::format_err!("Key not found"));
         }
         let content = serde_json::to_string(&c)?;
         let res = self.fm.writeToCurrent(&content)?;

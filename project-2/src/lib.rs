@@ -19,13 +19,12 @@ mod db;
 pub type Result<T> = db::common::Result<T>;
 
 pub struct KvStore {
-    // fmMutex: FileManagerLock,
-    // indexMutex: DBIndexLock,
     lm: LockManager
 }
 
 
 impl KvStore {
+    // i like new, but test need open
     pub fn new(work_dir: &Path) -> Result<KvStore> {
         KvStore::open(work_dir)
     }
@@ -34,6 +33,7 @@ impl KvStore {
         let mut index = DBIndex::new();
         fm.load(&mut index);
         let lm = LockManager::new(fm, index);
+        CompactorWorker::start(lm.clone());
         Ok(KvStore { lm })
     }
 
@@ -86,5 +86,14 @@ mod test {
         assert_eq!(res, "a");
         let res = kvs.get("b".to_owned()).unwrap();
         assert_eq!(res.is_none(), true);
+    }
+
+    #[test]
+    fn testRandom() {
+        //     todo
+        //     new kvs
+        //     random set, get, rm,use fixed seed
+        //     check get
+        //     check all file, check if compaction work
     }
 }

@@ -47,8 +47,8 @@ fn main() -> Result<()> {
         exit(0);
     } else if let Some(matches) = matches.subcommand_matches("rm") {
         let key = matches.value_of("key").unwrap().to_owned();
-        kvs.remove(key).map_err(|_| {
-            println!("Key not found");
+        kvs.remove(key).map_err(|e| {
+            println!("{}",e.to_string());
             exit(1);
         }).unwrap();
         exit(0);
