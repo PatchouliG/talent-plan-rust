@@ -40,11 +40,13 @@ impl CompactorWorker {
             let (mut fm, mut index) = self.lm.get();
             let needCompact = index.dbFileStatistic().iter().
                 filter(|fs| fs.usage() < CompactorWorker::USAGE_THRESHOLD && fm.isReadOnlyFile(fs.id())).
-                map(|fs| (fs.id(), fm.idToFile(fs.id()))).
-                collect::<Vec<(FileId, DBFile)>>();
+                map(|fs| (fs.id())).
+                collect::<Vec<FileId>>();
 
-            needCompact.iter().for_each(|(fId, dbf)| {
-                let iter = DBIter::new(dbf);
+
+            needCompact.iter().for_each(|fId| {
+                let dbf = fm.idToFile(*fId);
+                let iter = DBIter::new(&dbf);
                 iter.into_iter().for_each(|(content, offset)| {
                     let c = serde_json::from_str::<Command>(&content).unwrap();
                     match c {
@@ -53,7 +55,7 @@ impl CompactorWorker {
                             // write to fm, update index
                             if let Some(i) = res {
                                 // only migrate if index point to the db file
-                                if i.fileId == offset && i.fileId == *fId {
+                                if i.offset == offset && i.fileId == *fId {
                                     let newPosition = fm.writeToCurrent(&content).unwrap();
                                     index.set(&k, newPosition);
                                 }
@@ -88,7 +90,7 @@ mod testCompact {
         // write finish,check db size
 
         let tmpDir = TempDir::new().unwrap();
-        let mut fm = FileManager::newFmWithSize(tmpDir.path(), 512);
+        let mut fm = FileManager::newFmWithSize(tmpDir.path(), 4000);
         let mut index = DBIndex::new();
         let lm = LockManager::new(fm, index);
 
@@ -98,17 +100,17 @@ mod testCompact {
         let value = "23333333333333333333333333333333333333333333333333333333333333333333333";
         let content = serde_json::to_string(&Command::Set(key.to_owned(), value.to_owned())).unwrap();
 
-        for i in 1..50 {
+        for i in 1..500 {
             let (a, b) = lm.get();
             // just 3 different key
-            RequestWorker::new(a, b).handle_set(&(key.clone() + &(i % 3).to_string()), value).unwrap();
+            RequestWorker::new(a, b).handle_set(&(key.clone() + &(i % 20).to_string()), value).unwrap();
         }
         // wait compact start
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(200));
 
         let (fm, _) = lm.get();
         let len = fm.getReadOnlyFiles().len();
-        assert_eq!(len, 1)
+        assert_eq!(len, 0)
     }
 }
 

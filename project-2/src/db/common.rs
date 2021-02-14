@@ -20,7 +20,7 @@ impl Command {
         serde_json::to_string(&self).unwrap()
     }
     pub fn fromString(s: &str) -> Command {
-        let a: Command = serde_json::from_str(s).unwrap();
-        a
+        let a = serde_json::from_str::<Command>(s);
+        a.expect("error")
     }
 }

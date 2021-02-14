@@ -7,8 +7,6 @@ use std::sync::mpsc::{Receiver, Sender};
 use clap::Format;
 use failure::_core::cmp::max;
 use log::{info, warn};
-use serde::Deserialize;
-use serde::Serialize;
 use serde_json::map::Entry::Vacant;
 use tempfile::TempDir;
 
@@ -77,13 +75,14 @@ impl FileManager {
     // use new db file when size reach limit
     pub fn writeToCurrent(&mut self, content: &str) -> Result<ValueIndex> {
         let offset = self.currentFile.write(content)?;
+        let res = Ok(ValueIndex::new(offset, self.currentFileId));
         if offset > self.sizeLimit {
             let id = self.meta.newFileId();
             self.readOnlyFiles.insert(self.currentFileId, self.meta.idToDBFile(self.currentFileId));
             self.currentFile = self.meta.idToDBFile(id);
             self.currentFileId = id;
         }
-        Ok(ValueIndex::new(offset, self.currentFileId))
+        return res;
     }
     pub fn read(&self, index: ValueIndex) -> Result<Option<(String, usize)>> {
         let p = self.readOnlyFiles.get(&index.fileId);
