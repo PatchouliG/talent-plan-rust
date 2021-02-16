@@ -90,7 +90,7 @@ mod testCompact {
         // write finish,check db size
 
         let tmpDir = TempDir::new().unwrap();
-        let mut fm = FileManager::newFmWithSize(tmpDir.path(), 4000);
+        let mut fm = FileManager::newFmWithSize(tmpDir.path(), 2000);
         let mut index = DBIndex::new();
         let lm = LockManager::new(fm, index);
 
@@ -100,17 +100,28 @@ mod testCompact {
         let value = "23333333333333333333333333333333333333333333333333333333333333333333333";
         let content = serde_json::to_string(&Command::Set(key.to_owned(), value.to_owned())).unwrap();
 
+        let first_key = "firstKey";
+        let (a, b) = lm.get();
+        RequestWorker::new(a, b).handle_set(first_key, value).unwrap();
+
         for i in 1..500 {
             let (a, b) = lm.get();
             // just 3 different key
-            RequestWorker::new(a, b).handle_set(&(key.clone() + &(i % 20).to_string()), value).unwrap();
+            RequestWorker::new(a, b).handle_set(&(key.clone() + &(i % 5).to_string()), value).unwrap();
         }
         // wait compact start
         std::thread::sleep(Duration::from_millis(200));
 
         let (fm, _) = lm.get();
         let len = fm.getReadOnlyFiles().len();
-        assert_eq!(len, 0)
+        // no read only files, all kv is compact to current file
+        assert_eq!(len, 0);
+        drop(fm);
+
+        // check first value
+        let (a, b) = lm.get();
+        let first_value = RequestWorker::new(a, b).handle_get(first_key).unwrap().unwrap();
+        assert_eq!(first_value, value);
     }
 }
 
