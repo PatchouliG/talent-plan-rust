@@ -19,10 +19,87 @@ mod db;
 
 pub type Result<T> = db::common::Result<T>;
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum RequestResp {
+    Error,
+    None,
+    Value(String),
+}
+
+
+// #[derive(Serialize, Deserialize, Debug)]
+// pub enum SetRequestResp {
+//     Error,
+//     Ok,
+// }
+
+// #[derive(Serialize, Deserialize, Debug)]
+// pub enum GetRequestResp {
+//     Error,
+//     Ok,
+// }
+
+pub type SetRequestResp = Result<()>;
+
+pub enum GetRequestResp {
+    Error,
+    None,
+    Value(String),
+}
+
+pub type RmRequestResp = Result<()>;
+
+pub fn resp_to_str(request: RequestResp) -> String {
+    let res = serde_json::to_string(&request).unwrap();
+    res
+}
+
+pub fn str_to_request_result(s: String) -> RequestResp {
+    serde_json::from_str(&s).unwrap()
+}
+
+pub trait KvsEngine {
+    fn get(&self, key: String) -> Result<Option<String>>;
+    fn set(&mut self, key: String, value: String) -> Result<()>;
+    fn remove(&mut self, key: String) -> Result<()>;
+}
+
+pub enum EngineType {
+    kvs,
+    sled,
+}
+
+pub fn getStore(engineType: EngineType, path: &Path) -> Box<dyn KvsEngine> {
+    match engineType {
+        EngineType::kvs => {
+            let kvs = KvStore::new(path).unwrap();
+            Box::new(kvs)
+        }
+        EngineType::sled => {
+            let kvs = SledStore::new(path);
+            Box::new(kvs)
+        }
+    }
+}
+
+
 pub struct KvStore {
     lm: LockManager
 }
 
+impl KvsEngine for KvStore {
+    fn get(&self, key: String) -> Result<Option<String>> {
+        self.get(key)
+    }
+
+    fn set(&mut self, key: String, value: String) -> Result<()> {
+        self.set(key, value)
+    }
+
+    fn remove(&mut self, key: String) -> Result<()> {
+        self.remove(key)
+    }
+}
 
 impl KvStore {
     // i like new, but test need open
@@ -51,6 +128,49 @@ impl KvStore {
         RequestWorker::new(a, b).handle_rm(&key)
     }
 }
+
+struct SledStore {
+    db: sled::Db
+}
+
+impl SledStore {
+    fn new(p: &Path) -> SledStore {
+        SledStore { db: sled::open(p).unwrap() }
+    }
+}
+
+impl KvsEngine for SledStore {
+    fn get(&self, key: String) -> Result<Option<String>> {
+        let value = self.db.get(key);
+        let res = value.map(|o| o.map(|i| String::from_utf8(i.to_vec()).unwrap()));
+        let r = res.map_err(|e| failure::err_msg("sled store get error"));
+        r
+    }
+
+    fn set(&mut self, key: String, value: String) -> Result<()> {
+        let res = self.db.insert(key.as_str(), value.as_str());
+        let r = res.map(|_| ());
+        r.map_err(|e| failure::err_msg("sled store get error"))
+    }
+
+    fn remove(&mut self, key: String) -> Result<()> {
+        let res = self.db.remove(key.as_str());
+        match res {
+            std::result::Result::Ok(o) => {
+                if let None = o {
+                    return Err(failure::err_msg("Key not Found"));
+                }
+                Ok(())
+            }
+            std::result::Result::Err(_) => {
+                Err(failure::err_msg("error"))
+            }
+        }
+        // let r = res.map(|o| ());
+        // r.map_err(|e| failure::err_msg("sled store get error"))
+    }
+}
+
 
 #[cfg(test)]
 mod test {

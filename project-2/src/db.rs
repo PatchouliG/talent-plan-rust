@@ -6,3 +6,4 @@ pub mod db_file;
 pub mod db_meta;
 pub mod request_worker;
 pub mod lock_manager;
+pub mod debug;
